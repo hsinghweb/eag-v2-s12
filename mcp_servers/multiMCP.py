@@ -5,6 +5,7 @@ import asyncio
 import json
 from typing import Optional, Any, List, Dict
 from inspect import signature
+from contextlib import AsyncExitStack
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import ast
@@ -28,31 +29,42 @@ class MCP:
         self.server_command = server_command or sys.executable
         self.transport = transport
         self.session: Optional[ClientSession] = None
-        self.session_context = None
+        self.exit_stack: Optional[AsyncExitStack] = None
 
     async def ensure_session(self):
         if self.session:
             return self.session
 
-        if self.transport == "stdio":
-            params = StdioServerParameters(
-                command=self.server_command,
-                args=[self.server_script],
-                cwd=self.working_dir
-            )
-            self.session_context = stdio_client(params)
-        elif self.transport == "sse":
-            if not SSE_SUPPORTED:
-                raise ImportError("MCP SSE client not available. Please update your MCP SDK.")
-            self.session_context = sse_client(self.server_script)
-        else:
-            raise ValueError(f"Unsupported transport: {self.transport}")
+        self.exit_stack = AsyncExitStack()
+        stack = self.exit_stack
 
-        read, write = await self.session_context.__aenter__()
-        self.session = ClientSession(read, write)
-        await self.session.__aenter__()
-        await self.session.initialize()
-        return self.session
+        try:
+            if self.transport == "stdio":
+                params = StdioServerParameters(
+                    command=self.server_command,
+                    args=[self.server_script],
+                    cwd=self.working_dir
+                )
+                read, write = await stack.enter_async_context(stdio_client(params))
+            elif self.transport == "sse":
+                if not SSE_SUPPORTED:
+                    raise ImportError("MCP SSE client not available. Please update your MCP SDK.")
+                read, write = await stack.enter_async_context(sse_client(self.server_script))
+            else:
+                raise ValueError(f"Unsupported transport: {self.transport}")
+
+            self.session = await stack.enter_async_context(ClientSession(read, write))
+            await self.session.initialize()
+            return self.session
+        except Exception:
+            self.session = None
+            if stack:
+                try:
+                    await stack.aclose()
+                except Exception:
+                    pass
+            self.exit_stack = None
+            raise
 
     async def list_tools(self):
         session = await self.ensure_session()
@@ -64,10 +76,14 @@ class MCP:
         return await session.call_tool(tool_name, arguments)
 
     async def shutdown(self):
-        if self.session:
-            await self.session.__aexit__(None, None, None)
-        if self.session_context:
-            await self.session_context.__aexit__(None, None, None)
+        if self.exit_stack:
+            try:
+                await self.exit_stack.aclose()
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self.exit_stack = None
+        self.session = None
 
 class MultiMCP:
     def __init__(self, server_configs: List[dict]):
@@ -201,8 +217,8 @@ class MultiMCP:
 
     async def shutdown(self):
         for client in self.client_cache.values():
-            if client.session:
-                await client.session.__aexit__(None, None, None)
-            if client.session_context:
-                await client.session_context.__aexit__(None, None, None)
+            try:
+                await client.shutdown()
+            except Exception:
+                pass
 

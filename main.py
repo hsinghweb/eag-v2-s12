@@ -42,7 +42,11 @@ async def interactive() -> None:
     try:
         while True:
             print("\n\n")
-            query = input("📝  You: ").strip()
+            try:
+                query = input("📝  You: ").strip()
+            except EOFError:
+                log_step("Goodbye!", symbol="👋")
+                break
             if query.lower() in {"exit", "quit"}:
                 log_step("Goodbye!", symbol="👋")
                 break
@@ -64,12 +68,19 @@ async def interactive() -> None:
                 else:
                     log_error("Agent failed", e)
 
-            follow = input("Continue? (press Enter) or type 'exit': ").strip()
+            try:
+                follow = input("Continue? (press Enter) or type 'exit': ").strip()
+            except EOFError:
+                log_step("Goodbye!", symbol="👋")
+                break
             if follow.lower() in {"exit", "quit"}:
                 log_step("Goodbye!", symbol="👋")
                 break
     finally:
-        await multi_mcp.shutdown()
+        try:
+            await multi_mcp.shutdown()
+        except asyncio.CancelledError:
+            pass
 
 if __name__ == "__main__":
     load_dotenv()
