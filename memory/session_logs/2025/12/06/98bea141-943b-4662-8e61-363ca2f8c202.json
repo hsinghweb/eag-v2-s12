@@ -1,0 +1,193 @@
+{
+  "context": {
+    "session_id": "98bea141-943b-4662-8e61-363ca2f8c202",
+    "original_query": "Query 1: hi",
+    "globals": {
+      "memory": [
+        {
+          "score": 18.181818181818187,
+          "session_id": "be0e37b2-c3bb-4997-b149-3eb2f7f0cfaf",
+          "original_query": "Query 1: What is 4 * 4?",
+          "summary_output": "4 * 4 = 16",
+          "timestamp": "2025-05-19T05:55:46Z"
+        },
+        {
+          "score": 16.66666666666667,
+          "session_id": "16118c09-ce4c-44a9-b058-82dfdd079aef",
+          "original_query": "Query 1: What is the time today?",
+          "summary_output": "The current date and time is **May 22, 2025, 12:58 PM**.",
+          "timestamp": "2025-05-22T12:57:48Z"
+        },
+        {
+          "score": 14.285714285714292,
+          "session_id": "f90886c1-5ad4-4bf5-8ced-809d6a361bd3",
+          "original_query": "Query 1: What is 64/16?",
+          "summary_output": "64/16 = 4",
+          "timestamp": "2025-05-19T06:01:25Z"
+        }
+      ]
+    },
+    "memory": [
+      {
+        "original_query": "Query 1: hi",
+        "result_requirement": "Final summary",
+        "summarizer_summary": "Hi there!",
+        "confidence": 0.95,
+        "original_goal_achieved": true,
+        "route": "summarize"
+      }
+    ],
+    "graph": {
+      "directed": true,
+      "multigraph": false,
+      "graph": {},
+      "nodes": [
+        {
+          "data": {
+            "index": "ROOT",
+            "description": "initial query",
+            "type": "ROOT",
+            "status": "completed",
+            "result": null,
+            "conclusion": null,
+            "error": null,
+            "perception": {
+              "entities": [],
+              "result_requirement": "A simple greeting or acknowledgement",
+              "original_goal_achieved": true,
+              "local_goal_achieved": true,
+              "confidence": "0.9",
+              "reasoning": "The user query is a simple greeting. No further action is required. The agent can acknowledge the greeting.",
+              "local_reasoning": "The input is a basic greeting and does not require any tool use or complex logic.",
+              "last_tooluse_summary": "Not applicable",
+              "solution_summary": "The user said hi.",
+              "route": "summarize",
+              "instruction_to_summarize": "Acknowledge the user's greeting. A simple 'Hello' or 'Hi there' will suffice. Use a friendly tone."
+            },
+            "from_step": null
+          },
+          "id": "ROOT"
+        }
+      ],
+      "links": []
+    }
+  },
+  "session": {
+    "session_id": "98bea141-943b-4662-8e61-363ca2f8c202",
+    "original_query": "Query 1: hi",
+    "perception_snapshots": [
+      {
+        "run_id": "98bea141-943b-4662-8e61-363ca2f8c202-P",
+        "snapshot_type": "user_query",
+        "entities": [],
+        "result_requirement": "A simple greeting or acknowledgement",
+        "original_goal_achieved": true,
+        "reasoning": "The user query is a simple greeting. No further action is required. The agent can acknowledge the greeting.",
+        "local_goal_achieved": true,
+        "local_reasoning": "The input is a basic greeting and does not require any tool use or complex logic.",
+        "last_tooluse_summary": "Not applicable",
+        "solution_summary": "The user said hi.",
+        "confidence": "0.9",
+        "route": "summarize",
+        "timestamp": "...",
+        "return_to": ""
+      }
+    ],
+    "decision_snapshots": [],
+    "execution_snapshots": [],
+    "summarizer_snapshots": [
+      {
+        "run_id": "a4b44b14-1cdb-4428-8de4-29094b29b0af",
+        "input": {
+          "original_query": "Query 1: hi",
+          "globals_schema": {
+            "memory": [
+              {
+                "score": 18.181818181818187,
+                "session_id": "be0e37b2-c3bb-4997-b149-3eb2f7f0cfaf",
+                "original_query": "Query 1: What is 4 * 4?",
+                "summary_output": "4 * 4 = 16",
+                "timestamp": "2025-05-19T05:55:46Z"
+              },
+              {
+                "score": 16.66666666666667,
+                "session_id": "16118c09-ce4c-44a9-b058-82dfdd079aef",
+                "original_query": "Query 1: What is the time today?",
+                "summary_output": "The current date and time is **May 22, 2025, 12:58 PM**.",
+                "timestamp": "2025-05-22T12:57:48Z"
+              },
+              {
+                "score": 14.285714285714292,
+                "session_id": "f90886c1-5ad4-4bf5-8ced-809d6a361bd3",
+                "original_query": "Query 1: What is 64/16?",
+                "summary_output": "64/16 = 4",
+                "timestamp": "2025-05-19T06:01:25Z"
+              }
+            ]
+          },
+          "plan_graph": {
+            "directed": true,
+            "multigraph": false,
+            "graph": {},
+            "nodes": [
+              {
+                "data": {
+                  "index": "ROOT",
+                  "description": "initial query",
+                  "type": "ROOT",
+                  "status": "completed",
+                  "result": null,
+                  "conclusion": null,
+                  "error": null,
+                  "perception": {
+                    "entities": [],
+                    "result_requirement": "A simple greeting or acknowledgement",
+                    "original_goal_achieved": true,
+                    "local_goal_achieved": true,
+                    "confidence": "0.9",
+                    "reasoning": "The user query is a simple greeting. No further action is required. The agent can acknowledge the greeting.",
+                    "local_reasoning": "The input is a basic greeting and does not require any tool use or complex logic.",
+                    "last_tooluse_summary": "Not applicable",
+                    "solution_summary": "The user said hi.",
+                    "route": "summarize",
+                    "instruction_to_summarize": "Acknowledge the user's greeting. A simple 'Hello' or 'Hi there' will suffice. Use a friendly tone."
+                  },
+                  "from_step": null
+                },
+                "id": "ROOT"
+              }
+            ],
+            "links": []
+          },
+          "perception": {
+            "entities": [],
+            "result_requirement": "A simple greeting or acknowledgement",
+            "original_goal_achieved": true,
+            "local_goal_achieved": true,
+            "confidence": "0.9",
+            "reasoning": "The user query is a simple greeting. No further action is required. The agent can acknowledge the greeting.",
+            "local_reasoning": "The input is a basic greeting and does not require any tool use or complex logic.",
+            "last_tooluse_summary": "Not applicable",
+            "solution_summary": "The user said hi.",
+            "route": "summarize",
+            "instruction_to_summarize": "Acknowledge the user's greeting. A simple 'Hello' or 'Hi there' will suffice. Use a friendly tone."
+          }
+        },
+        "summary_output": "Hi there!",
+        "success": true,
+        "error": null,
+        "timestamp": "2025-12-06T13:45:21Z",
+        "return_to": ""
+      }
+    ],
+    "final_summary": "Hi there!",
+    "status": "success",
+    "completed_at": "2025-12-06T13:45:38.043645"
+  },
+  "status": "success",
+  "final_step_id": "ROOT",
+  "reason": "Summarized successfully",
+  "timestamp": "2025-12-06T13:45:38.044636",
+  "original_query": "Query 1: hi",
+  "final_summary": "Hi there!"
+}
