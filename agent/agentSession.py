@@ -77,6 +77,19 @@ class SummarizerSnapshot:
     return_to: str = ""
 
 
+@dataclass
+class BrowserAgentSnapshot:
+    """Snapshot of a BrowserAgent execution for session tracking"""
+    run_id: str
+    instruction: str
+    steps_executed: list
+    final_status: str  # "success" | "failed" | "max_steps_reached"
+    final_message: str
+    total_steps: int
+    timestamp: str = current_utc_ts()
+    error: Optional[str] = None
+
+
 
 @dataclass
 class Step:
@@ -121,6 +134,7 @@ class AgentSession:
         self.decision_snapshots: list[DecisionSnapshot] = []
         self.execution_snapshots: list[ExecutionSnapshot] = []
         self.summarizer_snapshots: list[SummarizerSnapshot] = []
+        self.browser_agent_snapshots: list[BrowserAgentSnapshot] = []
         self.final_summary = None
         self.status: str = "in_progress"
         self.completed_at: Optional[str] = None
@@ -149,6 +163,9 @@ class AgentSession:
     def add_summarizer_snapshot(self, snapshot: SummarizerSnapshot):
         self.summarizer_snapshots.append(snapshot)
 
+    def add_browser_agent_snapshot(self, snapshot: BrowserAgentSnapshot):
+        self.browser_agent_snapshots.append(snapshot)
+
 
     def add_plan_version(self, plan_texts: list[str], steps: list[Step]):
         plan = {
@@ -170,6 +187,7 @@ class AgentSession:
             "decision_snapshots": [asdict(d) for d in self.decision_snapshots],
             "execution_snapshots": [asdict(e) for e in self.execution_snapshots],
             "summarizer_snapshots": [asdict(s) for s in self.summarizer_snapshots],
+            "browser_agent_snapshots": [asdict(b) for b in self.browser_agent_snapshots],
             "final_summary": self.final_summary,
             "status": self.status,
             "completed_at": self.completed_at

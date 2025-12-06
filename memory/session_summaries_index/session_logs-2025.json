@@ -946,5 +946,13 @@
     "named_entities": [],
     "summary_output": "Hi there!",
     "timestamp": "2025-12-06T13:45:21Z"
+  },
+  {
+    "session_id": "22784a89-3f40-433b-b1b3-48b31741ac33",
+    "original_query": "Query 1: hello",
+    "normalized_query": "hello",
+    "named_entities": [],
+    "summary_output": "Hello there!",
+    "timestamp": "2025-12-06T14:19:23Z"
   }
 ]
