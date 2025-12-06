@@ -50,18 +50,28 @@ async def test_form_filling():
         max_steps=20  # Allow up to 20 steps for form filling
     )
     
-    # Create the instruction
+    # Create the instruction with specific form data
     instruction = f"""
     Navigate to the Google Form at {GOOGLE_FORM_URL} and fill out the form completely.
     
-    Fill in all required fields with appropriate test data:
-    - For name fields, use "Browser Agent Test"
-    - For email fields, use "browseragent.test@gmail.com"
-    - For any other text fields, provide reasonable test responses
-    - For multiple choice questions, select an appropriate option
-    - For checkbox questions, select at least one option
+    The form asks about a person. Fill in these EXACT values:
     
-    After filling all fields, submit the form and verify the submission was successful.
+    1. "What is his/her email id?" -> Fill with: himanshu@example.com
+    2. "What is his/her Date of Birth?" -> Fill with: 15-08-1995
+    3. "What course is he/her in?" -> Fill with: EAG Session 12
+    4. "What is the name of your Master?" -> Fill with: Agentic AI Master
+    5. "Is he/she married?" -> Select: No (click the No radio button)
+    6. "Which course is he/she taking?" -> Select: EAG from the dropdown
+    
+    IMPORTANT STEPS:
+    1. First navigate to the URL
+    2. For each text input field, find it by its question label and fill the value
+    3. For the radio button (married question), click on "No"
+    4. For the dropdown (course selection), click it and select "EAG"
+    5. After filling ALL fields, click the Submit button
+    6. Wait for confirmation that the form was submitted
+    
+    Do NOT repeat actions on fields you have already filled.
     """
     
     try:
