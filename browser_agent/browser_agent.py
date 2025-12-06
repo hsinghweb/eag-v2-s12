@@ -24,6 +24,14 @@ from utils.json_parser import parse_llm_json
 from browserMCP.mcp_tools import handle_tool_call, get_tools
 from browserMCP.mcp_utils.utils import get_browser_session, stop_browser_session
 
+# Google login detection patterns
+GOOGLE_LOGIN_PATTERNS = [
+    "accounts.google.com/signin",
+    "accounts.google.com/v3/signin",
+    "accounts.google.com/ServiceLogin",
+    "accounts.google.com/o/oauth2",
+]
+
 
 @dataclass
 class BrowserAgentSnapshot:
@@ -75,6 +83,92 @@ class BrowserAgent:
         self.model = ModelManager()
         self.snapshots: List[BrowserAgentSnapshot] = []
         
+        # Load Google credentials from environment
+        self.google_email = os.getenv("GOOGLE_EMAIL")
+        self.google_password = os.getenv("GOOGLE_PASSWORD")
+    
+    async def _check_google_login_required(self) -> bool:
+        """Check if the current page is a Google login page"""
+        try:
+            session = await get_browser_session()
+            page = await session.get_current_page()
+            current_url = page.url.lower()
+            
+            for pattern in GOOGLE_LOGIN_PATTERNS:
+                if pattern in current_url:
+                    return True
+            return False
+        except Exception:
+            return False
+    
+    async def _handle_google_login(self) -> bool:
+        """
+        Handle Google login if credentials are available in environment.
+        Returns True if login was successful or not needed.
+        """
+        if not await self._check_google_login_required():
+            return True  # No login needed
+        
+        log_step("[AUTH] Google login page detected...", symbol="!")
+        
+        # Check if credentials are available
+        if not self.google_email or not self.google_password:
+            log_step("[AUTH] No Google credentials in .env file.", symbol="!")
+            log_step("[AUTH] Please either:", symbol="!")
+            log_step("[AUTH]   1. Run: python -m browser_agent.setup_google_login", symbol="!")
+            log_step("[AUTH]   2. Add GOOGLE_EMAIL and GOOGLE_PASSWORD to .env", symbol="!")
+            log_step("[AUTH] Waiting 30 seconds for manual login...", symbol="!")
+            
+            # Wait for manual login
+            for i in range(30):
+                await asyncio.sleep(1)
+                if not await self._check_google_login_required():
+                    log_step("[AUTH] Login detected! Continuing...", symbol="+")
+                    return True
+            
+            log_step("[AUTH] Login timeout. Continuing anyway...", symbol="!")
+            return False
+        
+        try:
+            log_step("[AUTH] Attempting auto-login with credentials from .env...", symbol="->")
+            
+            # Wait for page to load
+            await asyncio.sleep(2)
+            
+            # Enter email
+            await handle_tool_call("input_text", {
+                "index": 0,  # Usually the first input is email
+                "text": self.google_email
+            })
+            await asyncio.sleep(1)
+            
+            # Click Next button
+            await handle_tool_call("click_element_by_index", {"index": 1})
+            await asyncio.sleep(3)
+            
+            # Enter password
+            await handle_tool_call("input_text", {
+                "index": 0,  # Password field
+                "text": self.google_password
+            })
+            await asyncio.sleep(1)
+            
+            # Click Next button
+            await handle_tool_call("click_element_by_index", {"index": 1})
+            await asyncio.sleep(5)
+            
+            # Check if login was successful
+            if not await self._check_google_login_required():
+                log_step("[AUTH] Login successful!", symbol="+")
+                return True
+            else:
+                log_step("[AUTH] Login may have failed. Check browser for verification.", symbol="!")
+                return False
+                
+        except Exception as e:
+            log_error(f"[AUTH] Error during Google login: {e}")
+            return False
+        
     async def run(
         self, 
         instruction: str,
@@ -108,6 +202,10 @@ class BrowserAgent:
                 "reasoning": "Initial navigation to target URL"
             })
             await asyncio.sleep(2)  # Wait for page to load
+            
+            # Check for Google login requirement
+            await self._handle_google_login()
+            await asyncio.sleep(1)  # Wait after login handling
         
         # Step 2: Main execution loop
         current_step = 1
