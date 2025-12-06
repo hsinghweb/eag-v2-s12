@@ -23,7 +23,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from browserMCP.mcp_tools import get_tools, handle_tool_call
 
 # Initialize FastMCP server
-mcp = FastMCP("browser-automation", timeout=30)
+mcp = FastMCP("browser-automation")
 
 # Helper function to create a generic tool wrapper
 async def generic_tool_handler(tool_name: str, ctx: Context, **kwargs) -> str:

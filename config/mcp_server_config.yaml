@@ -14,8 +14,9 @@ mcp_servers:
   #   transport: stdio
   #   description: "Webtools to search internet for queries and fetch content for a specific web page"
   - id: webbrowsing
-    script: http://localhost:8100/sse  # SSE URL
-    transport: sse
+    script: browserMCP/browser_mcp_stdio.py
+    cwd: D:/Himanshu/EAG-V2/eag-v2-s12
+    transport: stdio
     description: "Full Browser Access (persistent)"
   # - id: mixed
   #   script: mcp_server_4.py
