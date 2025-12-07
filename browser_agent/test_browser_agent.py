@@ -439,17 +439,86 @@ async def fill_google_form():
             print(f"    ❌ CRITICAL: Could not fill dropdown after {attempts} attempts!")
             print(f"    ⚠️  This is the 250 marks surprise element!")
     
-    # Summary
+    # Validation: Check if all fields are filled
     print(f"\n{'='*60}")
-    print(f"📊 FILLING SUMMARY")
+    print(f"📊 VALIDATION CHECK")
     print(f"{'='*60}")
-    print(f"✅ Filled {filled_count} out of {len(questions_on_form)} fields")
-    print(f"⚠️  Note: Form may have dynamic/surprise elements")
-    print(f"⚠️  Please verify all fields in browser before final submission")
+    print(f"Questions found: {len(questions_on_form)}")
+    print(f"Fields filled: {filled_count}")
+    
+    # List which questions were filled
+    print(f"\n✅ Successfully filled:")
+    filled_questions = []
+    for qm in question_matches:
+        if qm in text_questions or qm in radio_questions or qm in dropdown_questions:
+            # Check if this question was processed
+            q_short = qm["question"][:50]
+            print(f"  • {q_short}... → {qm['answer']}")
+            filled_questions.append(qm["question"])
+    
+    # Find unfilled questions
+    unfilled = [q for q in questions_on_form if q not in filled_questions]
+    if unfilled:
+        print(f"\n⚠️  UNFILLED QUESTIONS:")
+        for q in unfilled:
+            print(f"  • {q}")
+    
+    # Decision: Can we submit?
+    can_submit = (filled_count >= len(questions_on_form))
+    
+    print(f"\n{'='*60}")
+    if can_submit:
+        print(f"✅ ALL {len(questions_on_form)} FIELDS FILLED - Ready to submit!")
+    else:
+        print(f"❌ NOT ALL FIELDS FILLED!")
+        print(f"   Expected: {len(questions_on_form)} fields")
+        print(f"   Filled: {filled_count} fields")
+        print(f"   Missing: {len(questions_on_form) - filled_count} field(s)")
+        print(f"   ⚠️  This may include the 250 marks surprise element")
+        
+        # Retry unfilled fields
+        if unfilled:
+            print(f"\n   🔄 RETRY: Attempting to fill missing fields...")
+            
+            # Get fresh elements
+            elem_result = await handle_tool_call("get_interactive_elements", {
+                "viewport_mode": "all",
+                "structured_output": False
+            })
+            elements_text = elem_result[0].get("text", "") if elem_result else ""
+            
+            # Find all unused indices
+            all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+            unused_indices = [int(x) for x in all_text_inputs if int(x) not in used_indices]
+            
+            print(f"   📍 Unused indices available: {unused_indices}")
+            
+            # Try to fill each unfilled question
+            for unfilled_q in unfilled:
+                # Find the match for this question
+                unfilled_match = next((qm for qm in question_matches if qm["question"] == unfilled_q), None)
+                if unfilled_match and unused_indices:
+                    idx = unused_indices.pop(0)
+                    answer = unfilled_match["answer"]
+                    print(f"   🔄 Retry: {unfilled_q[:40]}...")
+                    print(f"      Trying index {idx} with answer: {answer}")
+                    try:
+                        await handle_tool_call("input_text", {"index": idx, "text": answer})
+                        filled_count += 1
+                        used_indices.append(idx)
+                        print(f"      ✅ Filled on retry!")
+                    except Exception as e:
+                        print(f"      ❌ Retry failed: {e}")
+            
+            print(f"\n   📊 After retry: {filled_count}/{len(questions_on_form)} fields filled")
+        
+        if filled_count < len(questions_on_form):
+            print(f"\n   ⚠️  WARNING: Proceeding with {filled_count}/{len(questions_on_form)} fields")
+            print(f"   Form may show errors or reject submission")
     print(f"{'='*60}")
     
     # Step 5: Submit
-    print("\n[STEP 5] Submitting form...")
+    print("\n[STEP 5] Attempting to submit form...")
     # Get fresh elements to find Submit button
     elem_result = await handle_tool_call("get_interactive_elements", {
         "viewport_mode": "all",
