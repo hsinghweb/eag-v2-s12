@@ -354,10 +354,11 @@ class BrowserAgent:
             elif s['action'] in ['click_element_by_index', 'select_dropdown_option'] and idx is not None:
                 clicked_indices.add(idx)
         
-        # Check for success indicators in page state
-        success_indicators = ["response has been recorded", "thanks for submitting", "response submitted", "your response", "form submitted"]
+        # Check for success indicators in page state (very specific to avoid false positives)
+        success_indicators = ["your response has been recorded", "thanks for submitting", "response submitted successfully"]
         page_lower = page_state.lower()
-        if any(indicator in page_lower for indicator in success_indicators):
+        # Only trigger if we've executed at least 5 steps (form filling takes multiple steps)
+        if len(steps_executed) >= 5 and any(indicator in page_lower for indicator in success_indicators):
             return {
                 "action": "done",
                 "params": {"success": True, "message": "Form submitted successfully - confirmation detected"},
@@ -365,9 +366,9 @@ class BrowserAgent:
                 "task_complete": True
             }
         
-        # Detect if we're on Google login page
-        google_login_indicators = ["sign in to google", "google account", "enter your email", "identifier", "accounts.google.com", "sign in with google"]
-        is_login_page = any(indicator in page_lower for indicator in google_login_indicators)
+        # Detect if we're on ACTUAL Google login page (accounts.google.com URL)
+        # NOT just a page that shows "Sign in to Google" button
+        is_login_page = "accounts.google.com" in page_lower and "identifier" in page_lower
         
         # Build simple steps list
         recent_steps = steps_executed[-5:] if len(steps_executed) > 5 else steps_executed
@@ -377,42 +378,16 @@ class BrowserAgent:
         truncated_page_state = page_state[:3500] if len(page_state) > 3500 else page_state
         
         if is_login_page:
-            # For login page, use ACTUAL credentials from .env, not placeholders
-            actual_email = self.google_email or "your_google_email@gmail.com"
-            actual_password = self.google_password or "your_password"
-            
-            # Determine what step we're on in the login process
-            has_email_filled = any("input_text" in str(s) and actual_email in str(s.get('params', {})) for s in steps_executed)
-            has_password_filled = any("password" in str(s.get('reasoning', '')) for s in steps_executed)
-            
-            login_step = "email"
-            if has_email_filled:
-                login_step = "next_after_email"
-            if "password" in page_lower or "enter your password" in page_lower:
-                login_step = "password"
-            if has_password_filled:
-                login_step = "sign_in"
-            
-            # Special prompt for login page with ACTUAL values
-            full_prompt = f"""Google Login Page. Return ONE JSON action.
-
-PAGE:
-{truncated_page_state[:2000]}
-
-EXACT CREDENTIALS (use EXACTLY):
-- Email: {actual_email}
-- Password: {actual_password}
-
-ALREADY DONE: {steps_list}
-CURRENT LOGIN STEP: {login_step}
-
-INSTRUCTIONS:
-- If you see email input field: {{"action": "input_text", "params": {{"index": <email_field_index>, "text": "{actual_email}"}}, "reasoning": "entering email"}}
-- If email entered, click Next: {{"action": "click_element_by_index", "params": {{"index": <next_button_index>}}, "reasoning": "click next"}}
-- If you see password field: {{"action": "input_text", "params": {{"index": <password_field_index>, "text": "{actual_password}"}}, "reasoning": "entering password"}}
-- If password entered, click Sign in: {{"action": "click_element_by_index", "params": {{"index": <signin_button_index>}}, "reasoning": "click sign in"}}
-
-Return JSON ONLY:"""
+            # Skip login page - session should be pre-logged-in
+            # Just mark as done or wait
+            log_step("[INFO] Login page detected - session should already be logged in")
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": "Login page appeared but session should be pre-authenticated. Run setup_login.py first.",
+                "task_complete": False,
+                "error": "Login required - run: python -m browser_agent.setup_login"
+            }
         else:
             # Regular form filling prompt - more explicit about avoiding repeats
             full_prompt = f"""Fill Google Form. Return ONE JSON action.
