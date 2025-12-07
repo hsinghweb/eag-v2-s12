@@ -90,17 +90,28 @@ Form Question:
 
 Task:
 1. Find the most relevant answer from INFO.md for this question
-2. Determine the field type based on the question:
-   - "text" for text input (name, email, date, etc.)
-   - "radio" for Yes/No questions or multiple choice with few options
-   - "dropdown" for "Which course" or "Select" type questions
+2. Determine the field type based on these rules:
+   - "text" for:
+     * Direct questions: "What is..." (name, email, date, course name)
+     * Free-form input fields
+     * Date fields
+   - "radio" for:
+     * Yes/No questions: "Is he/she..."
+     * Binary choices
+   - "dropdown" for:
+     * Selection questions: "Which..." (which course, which option)
+     * "Select from list" type questions
+     
+   IMPORTANT: "What course is he/her in?" is TEXT (asking for course name)
+              "Which course is he/she taking?" is DROPDOWN (selecting from list)
+              
 3. Rate your confidence (high/medium/low)
 
 Respond with ONLY a JSON object in this format:
 {{
     "answer": "the answer from INFO.md",
     "field_type": "text|radio|dropdown",
-    "confidence": "high|medium|low",
+    "confidence": "high|medium/low",
     "reasoning": "brief explanation"
 }}"""
 
@@ -223,16 +234,17 @@ async def fill_google_form():
     })
     elements_text = elem_result[0].get("text", "") if elem_result else ""
     
-    # Parse element indices
-    text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
-    text_indices = [int(x) for x in text_inputs]
-    print(f"  Text input indices: {text_indices}")
+    # Parse ALL available input indices (we'll use them dynamically)
+    all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+    available_indices = [int(x) for x in all_text_inputs]
+    print(f"  Available input indices: {available_indices}")
+    print(f"  Total: {len(available_indices)} inputs")
     
     # Step 4: Fill each question ONE BY ONE with LLM matching
     print("\n[STEP 4] Filling form fields one by one...")
     
-    text_field_counter = 0
     filled_count = 0
+    used_indices = []
     
     for i, question in enumerate(questions_on_form, 1):
         print(f"\n  [{i}/{len(questions_on_form)}] Question: \"{question}\"")
@@ -248,14 +260,14 @@ async def fill_google_form():
         print(f"    ✓ Answer: {answer} (type: {field_type}, confidence: {confidence})")
         
         if field_type == "text":
-            # Fill text field
-            if text_field_counter < len(text_indices):
-                idx = text_indices[text_field_counter]
+            # Fill text field - use next available index
+            if available_indices:
+                idx = available_indices.pop(0)  # Take first available
+                used_indices.append(idx)
                 print(f"    📝 Filling text input at index {idx}...")
                 await handle_tool_call("input_text", {"index": idx, "text": answer})
-                text_field_counter += 1
                 filled_count += 1
-                print(f"    ✅ Filled!")
+                print(f"    ✅ Filled! ({len(available_indices)} inputs remaining)")
                 await asyncio.sleep(0.8)
             else:
                 print("    ⚠️  Warning: No more text input indices available")
@@ -280,9 +292,10 @@ async def fill_google_form():
                 filled_count += 1
                 print(f"    ✅ Selected!")
             else:
-                print(f"    ⚠️  Exact match not found, trying nearby indices...")
-                # Fallback: try indices around the question
-                for radio_idx in range(text_field_counter + 2, text_field_counter + 8):
+                print(f"    ⚠️  Exact match not found, trying sequential search...")
+                # Fallback: try clicking elements one by one to find radio
+                last_used = used_indices[-1] if used_indices else 0
+                for radio_idx in range(last_used + 1, last_used + 10):
                     try:
                         await handle_tool_call("click_element_by_index", {"index": radio_idx})
                         print(f"    ✅ Clicked radio at index {radio_idx}")
@@ -298,33 +311,20 @@ async def fill_google_form():
             print(f"    🎯 DROPDOWN: Using breakthrough method!")
             print(f"       (Typing into hidden input field)")
             
-            # Get fresh elements to find dropdown options
-            elem_result = await handle_tool_call("get_interactive_elements", {
-                "viewport_mode": "all",
-                "structured_output": False
-            })
-            elements_text = elem_result[0].get("text", "") if elem_result else ""
-            
-            # Find all text inputs (including hidden ones)
-            text_inputs_all = re.findall(r'\[(\d+)\]<input type=\'text\'', elements_text)
-            
-            # The dropdown's hidden input is after the visible text inputs
-            dropdown_input_idx = None
-            if text_field_counter < len(text_inputs_all):
-                dropdown_input_idx = int(text_inputs_all[text_field_counter])
-                print(f"    📍 Found hidden input at index {dropdown_input_idx}")
+            # Use next available index (dropdowns have hidden text inputs)
+            if available_indices:
+                dropdown_input_idx = available_indices.pop(0)  # Take first available
+                used_indices.append(dropdown_input_idx)
+                print(f"    📍 Using hidden input at index {dropdown_input_idx}")
+                
+                # Type directly into the hidden input field - this is the key!
+                print(f"    ⌨️  Typing '{answer}' into hidden input...")
+                await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": answer})
+                filled_count += 1
+                print(f"    ✅ Dropdown filled! ({len(available_indices)} inputs remaining)")
+                await asyncio.sleep(1)
             else:
-                # Fallback
-                dropdown_input_idx = text_field_counter
-                print(f"    📍 Using fallback index {dropdown_input_idx}")
-            
-            # Type directly into the hidden input field - this is the key!
-            print(f"    ⌨️  Typing '{answer}' into hidden input...")
-            await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": answer})
-            text_field_counter += 1  # Count dropdown as a text input
-            filled_count += 1
-            print(f"    ✅ Dropdown filled!")
-            await asyncio.sleep(1)
+                print(f"    ⚠️  No more input indices available for dropdown")
     
     # Summary
     print(f"\n{'='*60}")
