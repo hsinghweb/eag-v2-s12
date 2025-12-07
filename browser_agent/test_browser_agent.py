@@ -171,14 +171,42 @@ async def fill_google_form():
     for q, a in info_data.items():
         print(f"  {q[:50]}... → {a}")
     
-    # Step 1: Navigate to FRESH form (use incognito-like approach)
-    print("\n[STEP 1] Opening fresh form...")
+    # Step 1: Navigate to form
+    print("\n[STEP 1] Opening form...")
     await handle_tool_call("open_tab", {"url": GOOGLE_FORM_URL})
     await asyncio.sleep(3)
     
-    # Reload to ensure fresh state
-    await handle_tool_call("reload_page", {})
-    await asyncio.sleep(3)
+    # Step 1.5: Clear all text inputs individually
+    print("\n[STEP 1.5] Clearing all text fields to ensure fresh start...")
+    import re
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    elements_text = elem_result[0].get("text", "") if elem_result else ""
+    
+    # Find all text input indices
+    text_inputs_to_clear = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+    text_indices_to_clear = [int(x) for x in text_inputs_to_clear]
+    
+    if text_indices_to_clear:
+        print(f"  Found {len(text_indices_to_clear)} text inputs: {text_indices_to_clear}")
+        print(f"  🧹 Clearing each field...")
+        
+        for idx in text_indices_to_clear:
+            try:
+                # Clear by typing empty string
+                await handle_tool_call("input_text", {"index": idx, "text": ""})
+                print(f"    ✓ Cleared input at index {idx}")
+            except Exception as e:
+                print(f"    ⚠️  Could not clear index {idx}: {e}")
+        
+        await asyncio.sleep(1)
+        print(f"  ✅ All text fields cleared! Starting fresh.")
+    else:
+        print(f"  ℹ️  No text inputs found to clear")
+    
+    await asyncio.sleep(1)
     
     # Step 2: Get page content and extract questions from markdown
     print("\n[STEP 2] Reading form structure...")
