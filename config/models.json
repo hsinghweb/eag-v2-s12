@@ -19,6 +19,14 @@
         "embed": "http://localhost:11434/api/embeddings"
       }
     },
+    "phi3:mini": {
+      "type": "ollama",
+      "model": "phi3:mini",
+      "url": {
+        "generate": "http://localhost:11434/api/generate",
+        "embed": "http://localhost:11434/api/embeddings"
+      }
+    },
     "gemma3:12b": {
       "type": "ollama",
       "model": "gemma3:12b",
@@ -63,9 +71,13 @@
       }
     },
     "nomic": {
-      "type": "huggingface",
-      "model": "nomic-ai/nomic-embed-text-v1",
-      "embedding_dimension": 768
+      "type": "ollama",
+      "model": "nomic-embed-text",
+      "embedding_dimension": 768,
+      "url": {
+        "generate": "http://localhost:11434/api/generate",
+        "embed": "http://localhost:11434/api/embeddings"
+      }
     }
   }
 }
