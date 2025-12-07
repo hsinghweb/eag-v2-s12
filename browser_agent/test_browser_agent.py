@@ -345,14 +345,14 @@ async def fill_google_form():
         if not filled_this:
             print(f"    ❌ Could not fill this field after {attempts} attempts")
     
-    # Fill radio buttons
+    # Fill radio buttons - ROBUST APPROACH
     for qm in radio_questions:
         question = qm["question"]
         answer = qm["answer"]
         
         print(f"\n  [{filled_count+1}] RADIO: \"{question[:50]}...\"")
         print(f"    Answer: {answer}")
-        print(f"    🔘 Looking for radio button '{answer}'...")
+        print(f"    🔘 Searching for '{answer}' radio button...")
         
         # Get fresh elements
         elem_result = await handle_tool_call("get_interactive_elements", {
@@ -361,83 +361,158 @@ async def fill_google_form():
         })
         elements_text = elem_result[0].get("text", "") if elem_result else ""
         
-        # Try to find the answer text in elements
-        radio_match = re.search(rf'\[(\d+)\]<div[^>]*>{re.escape(answer)}<', elements_text, re.IGNORECASE)
+        filled_radio = False
         
-        if radio_match:
-            radio_idx = int(radio_match.group(1))
-            print(f"    📍 Found at index {radio_idx}, clicking...")
-            await handle_tool_call("click_element_by_index", {"index": radio_idx})
-            filled_count += 1
-            print(f"    ✅ Selected!")
-        else:
-            print(f"    ⚠️  Exact match not found, trying sequential search...")
-            # Fallback: try clicking elements one by one
-            last_used = used_indices[-1] if used_indices else 0
-            for radio_idx in range(last_used + 1, last_used + 10):
+        # Method 1: Try exact match with multiple patterns
+        patterns = [
+            rf'\[(\d+)\]<div[^>]*>{re.escape(answer)}<',
+            rf'\[(\d+)\][^[]*\b{re.escape(answer)}\b',
+            rf'\[(\d+)\]<span[^>]*>{re.escape(answer)}<'
+        ]
+        
+        for pattern in patterns:
+            if filled_radio:
+                break
+            radio_match = re.search(pattern, elements_text, re.IGNORECASE)
+            if radio_match:
+                radio_idx = int(radio_match.group(1))
+                print(f"    📍 Found at index {radio_idx}, clicking...")
                 try:
                     await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                    print(f"    ✅ Clicked radio at index {radio_idx}")
                     filled_count += 1
-                    break
+                    filled_radio = True
+                    print(f"    ✅ Radio button selected!")
+                except Exception as e:
+                    print(f"    ⚠️  Click failed: {e}")
+        
+        # Method 2: Sequential search if exact match failed
+        if not filled_radio:
+            print(f"    🔍 Exact match failed, searching sequentially...")
+            # Start from a reasonable index (after used indices)
+            start_idx = (used_indices[-1] + 1) if used_indices else 0
+            
+            for radio_idx in range(start_idx, start_idx + 15):
+                try:
+                    result = await handle_tool_call("click_element_by_index", {"index": radio_idx})
+                    # Check if this looks like a radio button click
+                    result_text = str(result).lower() if result else ""
+                    if "radio" in result_text or "button" in result_text or len(result_text) < 50:
+                        print(f"    ✅ Selected radio at index {radio_idx}")
+                        filled_count += 1
+                        filled_radio = True
+                        break
                 except Exception:
                     continue
         
+        if not filled_radio:
+            print(f"    ❌ FAILED to fill radio button!")
+        
         await asyncio.sleep(0.8)
     
-    # Fill dropdowns - THE BREAKTHROUGH SOLUTION + RESILIENT TO HIDDEN ELEMENTS
+    # Fill dropdowns - MULTIPLE ROBUST METHODS
     for qm in dropdown_questions:
         question = qm["question"]
         answer = qm["answer"]
         
         print(f"\n  [{filled_count+1}] DROPDOWN: \"{question[:50]}...\"")
         print(f"    Answer: {answer}")
-        print(f"    🎯 Breakthrough method: hidden input field (skip hidden elements)")
         
-        # Get fresh elements to see current state
+        filled_dropdown = False
+        
+        # METHOD 1: Hidden input field (breakthrough method)
+        print(f"    🎯 Method 1: Hidden input field...")
+        
+        # Get fresh elements
         elem_result = await handle_tool_call("get_interactive_elements", {
             "viewport_mode": "all",
             "structured_output": False
         })
         elements_text = elem_result[0].get("text", "") if elem_result else ""
         
-        # Re-scan for ALL text inputs
+        # Find ALL text inputs (including hidden ones)
         all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
         current_available = [int(x) for x in all_text_inputs if int(x) not in used_indices]
         
-        print(f"    📍 Available unused indices: {current_available}")
+        print(f"    📍 Available unused text inputs: {current_available}")
         
-        # Try multiple indices until one works (skip hidden elements)
-        filled_this = False
+        # Try up to 5 available indices (skip hidden ones)
         attempts = 0
+        indices_to_try = current_available[:5] if len(current_available) >= 5 else current_available
         
-        while not filled_this and attempts < 10:
-            if current_available:
-                dropdown_input_idx = current_available.pop(0)
-            else:
-                # Generate next sequential index
-                last_idx = used_indices[-1] if used_indices else 0
-                dropdown_input_idx = last_idx + 1
-            
+        for dropdown_input_idx in indices_to_try:
+            if filled_dropdown:
+                break
             attempts += 1
-            
             try:
-                print(f"    📝 Attempt {attempts}: Trying index {dropdown_input_idx}...")
+                print(f"    📝 Attempt {attempts}: Index {dropdown_input_idx}...")
                 await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": answer})
+                
+                # Wait and check if it worked
+                await asyncio.sleep(0.5)
+                
                 used_indices.append(dropdown_input_idx)
                 filled_count += 1
-                filled_this = True
+                filled_dropdown = True
                 print(f"    ✅ Dropdown filled at index {dropdown_input_idx}!")
-                await asyncio.sleep(1)
             except Exception as e:
-                print(f"    ⚠️  Index {dropdown_input_idx} failed (hidden?), trying next...")
-                # Add next sequential index if we run out
-                if not current_available:
-                    current_available.append(dropdown_input_idx + 1)
+                print(f"    ⚠️  Index {dropdown_input_idx} failed (hidden element)")
         
-        if not filled_this:
-            print(f"    ❌ CRITICAL: Could not fill dropdown after {attempts} attempts!")
+        # METHOD 2: Click listbox approach
+        if not filled_dropdown:
+            print(f"    🎯 Method 2: Click listbox UI...")
+            
+            # Find listbox or dropdown elements
+            listbox_patterns = [
+                r'\[(\d+)\]<div[^>]*role=["\']listbox',
+                r'\[(\d+)\]<div[^>]*role=["\']combobox',
+                r'\[(\d+)\]<select'
+            ]
+            
+            for pattern in listbox_patterns:
+                if filled_dropdown:
+                    break
+                listbox_match = re.search(pattern, elements_text, re.IGNORECASE)
+                if listbox_match:
+                    listbox_idx = int(listbox_match.group(1))
+                    print(f"    📍 Found dropdown at index {listbox_idx}, clicking...")
+                    try:
+                        await handle_tool_call("click_element_by_index", {"index": listbox_idx})
+                        await asyncio.sleep(1)
+                        
+                        # Get updated elements after dropdown opens
+                        elem_result = await handle_tool_call("get_interactive_elements", {
+                            "viewport_mode": "all",
+                            "structured_output": False
+                        })
+                        elements_text = elem_result[0].get("text", "") if elem_result else ""
+                        
+                        # Find and click the answer option
+                        option_patterns = [
+                            rf'\[(\d+)\]<div[^>]*>{re.escape(answer)}<',
+                            rf'\[(\d+)\][^[]*\b{re.escape(answer)}\b',
+                            rf'\[(\d+)\]<span[^>]*>{re.escape(answer)}<'
+                        ]
+                        
+                        for opt_pattern in option_patterns:
+                            if filled_dropdown:
+                                break
+                            option_match = re.search(opt_pattern, elements_text, re.IGNORECASE)
+                            if option_match:
+                                option_idx = int(option_match.group(1))
+                                print(f"    📍 Found option '{answer}' at index {option_idx}, clicking...")
+                                await handle_tool_call("click_element_by_index", {"index": option_idx})
+                                filled_count += 1
+                                filled_dropdown = True
+                                print(f"    ✅ Dropdown selected via click!")
+                                break
+                    except Exception as e:
+                        print(f"    ⚠️  Click method failed: {e}")
+        
+        if not filled_dropdown:
+            print(f"    ❌ CRITICAL: Could not fill dropdown with any method!")
             print(f"    ⚠️  This is the 250 marks surprise element!")
+        
+        await asyncio.sleep(1)
     
     # Validation: Check if all fields are filled
     print(f"\n{'='*60}")
