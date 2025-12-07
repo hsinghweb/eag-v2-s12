@@ -6,6 +6,16 @@ Usage:
     
 Or from project root:
     python browser_agent/test_browser_agent.py
+    
+Required .env variables:
+    GOOGLE_EMAIL=your_email@gmail.com
+    GOOGLE_PASSWORD=your_password
+    FORM_EMAIL=submission_email@example.com
+    FORM_DOB=15-08-1995
+    FORM_COURSE=EAG Session 12
+    FORM_MASTER_NAME=Agentic AI Master
+    FORM_MARRIED=No
+    FORM_COURSE_TAKING=EAG
 """
 
 import asyncio
@@ -33,6 +43,26 @@ from browserMCP.mcp_utils.utils import stop_browser_session
 GOOGLE_FORM_URL = "https://forms.gle/6Nc6QaaJyDvePxLv7"
 
 
+def get_form_data():
+    """Load form data from environment variables"""
+    return {
+        "email": os.getenv("FORM_EMAIL", "test@example.com"),
+        "dob": os.getenv("FORM_DOB", "15-08-1995"),
+        "course": os.getenv("FORM_COURSE", "EAG Session 12"),
+        "master_name": os.getenv("FORM_MASTER_NAME", "Agentic AI Master"),
+        "married": os.getenv("FORM_MARRIED", "No"),
+        "course_taking": os.getenv("FORM_COURSE_TAKING", "EAG"),
+    }
+
+
+def get_google_credentials():
+    """Load Google login credentials from environment variables"""
+    return {
+        "email": os.getenv("GOOGLE_EMAIL"),
+        "password": os.getenv("GOOGLE_PASSWORD"),
+    }
+
+
 async def test_form_filling():
     """Test the BrowserAgent by filling the Google Form"""
     
@@ -42,34 +72,65 @@ async def test_form_filling():
     print(f"Target URL: {GOOGLE_FORM_URL}")
     print()
     
+    # Load credentials and form data
+    google_creds = get_google_credentials()
+    form_data = get_form_data()
+    
+    print("[CONFIG] Form Data Loaded:")
+    for key, value in form_data.items():
+        print(f"  - {key}: {value}")
+    print()
+    
+    if google_creds["email"] and google_creds["password"]:
+        print(f"[CONFIG] Google Login: {google_creds['email']}")
+    else:
+        print("[CONFIG] Google Login: Not configured (will use existing session)")
+    print()
+    
     # Initialize the BrowserAgent
     prompt_path = project_root / "prompts" / "browser_agent_prompt.txt"
     
     agent = BrowserAgent(
         prompt_path=str(prompt_path),
-        max_steps=20  # Allow up to 20 steps for form filling
+        max_steps=25  # Allow up to 25 steps for login + form filling
     )
+    
+    # Build instruction with login if credentials provided
+    login_instruction = ""
+    if google_creds["email"] and google_creds["password"]:
+        login_instruction = f"""
+    STEP 0 - GOOGLE LOGIN (if not already logged in):
+    If you see a Google login page or "Sign in" button:
+    1. Enter email: {google_creds['email']}
+    2. Click Next
+    3. Enter password: {google_creds['password']}
+    4. Click Next/Sign in
+    5. Wait for login to complete
+    
+    If already logged in, skip to form filling.
+    """
     
     # Create the instruction with specific form data
     instruction = f"""
     Navigate to the Google Form at {GOOGLE_FORM_URL} and fill out the form completely.
-    
+    {login_instruction}
     The form asks about a person. Fill in these EXACT values:
     
-    1. "What is his/her email id?" -> Fill with: himanshu@example.com
-    2. "What is his/her Date of Birth?" -> Fill with: 15-08-1995
-    3. "What course is he/her in?" -> Fill with: EAG Session 12
-    4. "What is the name of your Master?" -> Fill with: Agentic AI Master
-    5. "Is he/she married?" -> Select: No (click the No radio button)
-    6. "Which course is he/she taking?" -> Select: EAG from the dropdown
+    1. "What is his/her email id?" -> Fill with: {form_data['email']}
+    2. "What is his/her Date of Birth?" -> Fill with: {form_data['dob']}
+    3. "What course is he/her in?" -> Fill with: {form_data['course']}
+    4. "What is the name of your Master?" -> Fill with: {form_data['master_name']}
+    5. "Is he/she married?" -> Select: {form_data['married']} (click the {form_data['married']} radio button)
+    6. "Which course is he/she taking?" -> Select: {form_data['course_taking']} from the dropdown
     
     IMPORTANT STEPS:
     1. First navigate to the URL
-    2. For each text input field, find it by its question label and fill the value
-    3. For the radio button (married question), click on "No"
-    4. For the dropdown (course selection), click it and select "EAG"
-    5. After filling ALL fields, click the Submit button
-    6. Wait for confirmation that the form was submitted
+    2. If login is required, complete the Google login first
+    3. For each text input field, find it by its question label and fill the value
+    4. For the radio button (married question), click on "{form_data['married']}"
+    5. For the dropdown (course selection), click it and select "{form_data['course_taking']}"
+    6. After filling ALL fields, click the Submit button
+    7. Wait for confirmation that the form was submitted
     
     Do NOT repeat actions on fields you have already filled.
     """

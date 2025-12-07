@@ -1,0 +1,37 @@
+# Form Configuration for BrowserAgent
+# This file contains the data to fill in the Google Form
+
+google_form:
+  url: "https://forms.gle/6Nc6QaaJyDvePxLv7"
+  
+  # Form fields mapping (question -> answer)
+  fields:
+    - question: "What is his/her email id?"
+      answer: "${FORM_EMAIL}"  # Will use FORM_EMAIL from .env
+      type: "text"
+    
+    - question: "What is his/her Date of Birth?"
+      answer: "${FORM_DOB}"
+      type: "text"
+    
+    - question: "What course is he/her in?"
+      answer: "${FORM_COURSE}"
+      type: "text"
+    
+    - question: "What is the name of your Master?"
+      answer: "${FORM_MASTER_NAME}"
+      type: "text"
+    
+    - question: "Is he/she married?"
+      answer: "${FORM_MARRIED}"  # Yes/No/Maybe
+      type: "radio"
+    
+    - question: "Which course is he/she taking?"
+      answer: "${FORM_COURSE_TAKING}"  # ERA/EAG/EPAi
+      type: "dropdown"
+
+# Google Login credentials (from .env)
+google_login:
+  email: "${GOOGLE_EMAIL}"
+  password: "${GOOGLE_PASSWORD}"
+
