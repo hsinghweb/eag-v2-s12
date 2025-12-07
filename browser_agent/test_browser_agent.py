@@ -13,7 +13,6 @@ Google credentials should be in .env:
 import asyncio
 import sys
 import os
-import re
 from pathlib import Path
 
 # Fix encoding for Windows terminal
@@ -135,41 +134,42 @@ async def test_form_filling():
         max_steps=25  # Allow up to 25 steps for login + form filling
     )
     
-    # Load raw INFO.md content for LLM context
-    info_content = load_info_file() or ""
-    
-    # Create the instruction with INFO.md as the source of truth
+    # Create instruction with clear Q&A mapping from INFO.md
     instruction = f"""
-TASK: Fill Google Form at {GOOGLE_FORM_URL}
+=== KNOWLEDGE BASE (from INFO.md) - USE THESE EXACT ANSWERS ===
 
-=== SOURCE OF TRUTH (from INFO.md) ===
-{info_content}
-=== END SOURCE ===
+Q: What is the name of your Master?
+A: {form_data['master_name']}
 
-EXTRACTED ANSWERS (use these EXACT values):
-- "What is the name of your Master?" → {form_data['master_name']}
-- "What is his/her Date of Birth?" → {form_data['dob']}
-- "Is he/she married?" → {form_data['married']}
-- "What is his/her email id?" → {form_data['email']}
-- "What course is he/her in?" → {form_data['course']}
-- "Which course is he/she taking?" → {form_data['course_taking']}
+Q: What is his/her Date of Birth?
+A: {form_data['dob']}
 
-FIELD TYPE RULES:
-- Text questions (email, DOB, Master name, course): use input_text
-- "Is he/she married?" (Yes/No): CLICK the radio button, do NOT type
-- "Which course is he/she taking?" (dropdown): use select_dropdown_option
+Q: Is he/she married?
+A: {form_data['married']}
 
-PROCESS:
-1. Fill ALL text fields first (skip radio buttons and dropdowns for now)
-2. Handle the "married" question by clicking the "{form_data['married']}" radio button
-3. Handle the "course taking" dropdown by selecting "{form_data['course_taking']}"
-4. Click Submit button
-5. IF Google login appears after submit:
-   - Email: {google_creds['email']}
-   - Password: {google_creds['password']}
-6. When you see "response recorded" → return done
+Q: What is his/her email id?
+A: {form_data['email']}
 
-IMPORTANT: Match form questions to the SOURCE OF TRUTH above. Use EXACT values.
+Q: What course is he/her in?
+A: {form_data['course']}
+
+Q: Which course is he/she taking?
+A: {form_data['course_taking']}
+
+=== END KNOWLEDGE BASE ===
+
+TASK: Fill the Google Form at {GOOGLE_FORM_URL}
+Questions appear in RANDOM order - match each form question to the knowledge base above.
+
+FIELD TYPES:
+- "name of your Master" → TEXT input: {form_data['master_name']}
+- "Date of Birth" → TEXT input: {form_data['dob']}
+- "email" → TEXT input: {form_data['email']}
+- "course is he/her in" → TEXT input: {form_data['course']}
+- "married" → RADIO button: click "{form_data['married']}"
+- "course is he/she taking" → DROPDOWN: select "{form_data['course_taking']}"
+
+After filling ALL fields, click Submit button.
 """
     
     try:

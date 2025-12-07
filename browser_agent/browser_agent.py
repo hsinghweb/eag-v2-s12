@@ -389,33 +389,41 @@ class BrowserAgent:
                 "error": "Login required - run: python -m browser_agent.setup_login"
             }
         else:
-            # Regular form filling prompt - more explicit about avoiding repeats
-            full_prompt = f"""Fill Google Form. Return ONE JSON action.
+            # Form filling prompt - LLM must match question text to answer from INFO.md
+            full_prompt = f"""You are filling a Google Form. Questions appear in RANDOM order.
 
-TASK: {instruction[:800]}
+KNOWLEDGE BASE (use this to answer questions):
+{instruction}
 
-PAGE:
+CURRENT PAGE STATE:
 {truncated_page_state}
 
-=== CRITICAL: ALREADY FILLED (SKIP THESE INDICES) ===
-{filled_indices if filled_indices else 'None'}
-Values filled: {filled_values if filled_values else 'None'}
-
+ALREADY FILLED INDICES (DO NOT FILL AGAIN): {list(filled_indices) if filled_indices else 'None'}
 Recent actions: {steps_list}
 Step {current_step}/{self.max_steps}
 
-RULES:
-1. DO NOT use indices {list(filled_indices)} - already filled!
-2. For Yes/No questions: click_element_by_index on the radio button
-3. For dropdowns: use select_dropdown_option
-4. For text fields: use input_text
-5. After all fields filled: click_element_by_index on Submit button
-6. If form complete: return {{"action":"done","params":{{}},"reasoning":"complete"}}
+YOUR TASK:
+1. Look at each form field/question in the PAGE STATE
+2. Find a field that is NOT in the "already filled" list
+3. Match the question text to the KNOWLEDGE BASE to find the answer
+4. Return the action to fill that field
 
-Return JSON (one action only):
-{{"action": "ACTION", "params": {{"index": N, "text": "VALUE"}}, "reasoning": "brief"}}
+QUESTION MATCHING GUIDE:
+- "name of your Master" or "Master" → Answer: Himanshu Singh
+- "Date of Birth" or "DOB" → Answer: 17-Dec-1984  
+- "married" → Answer: Yes (click radio button)
+- "email" → Answer: himanshu.kumar.singh@gmail.com
+- "course is he/her in" → Answer: EAG V2
+- "course is he/she taking" or "Which course" (dropdown) → Answer: EAG V2
 
-JSON:"""
+ACTION TYPES:
+- Text field: {{"action": "input_text", "params": {{"index": N, "text": "ANSWER"}}, "reasoning": "question X → answer Y"}}
+- Radio button (Yes/No): {{"action": "click_element_by_index", "params": {{"index": N}}, "reasoning": "clicking Yes/No option"}}
+- Dropdown: {{"action": "select_dropdown_option", "params": {{"index": N, "option_text": "ANSWER"}}, "reasoning": "selecting option"}}
+- Submit: {{"action": "click_element_by_index", "params": {{"index": N}}, "reasoning": "clicking Submit button"}}
+- Done: {{"action": "done", "params": {{}}, "reasoning": "form submitted"}}
+
+Return ONE JSON action only:"""
         
         try:
             time.sleep(1)  # Rate limiting
