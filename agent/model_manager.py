@@ -1,10 +1,8 @@
 import os
 import json
 import yaml
-import requests
+import aiohttp
 from pathlib import Path
-from google import genai
-from google.genai.errors import ServerError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,10 +20,14 @@ class ModelManager:
         self.model_info = self.config["models"][self.text_model_key]
         self.model_type = self.model_info["type"]
 
-        # ✅ Gemini initialization with new library
+        # Gemini API configuration
         if self.model_type == "gemini":
-            api_key = os.getenv("GEMINI_API_KEY")
-            self.client = genai.Client(api_key=api_key)
+            self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+            # Use GEMINI_API_URL if provided, otherwise construct default
+            self.gemini_api_url = os.getenv("GEMINI_API_URL")
+            if not self.gemini_api_url:
+                model_name = self.model_info.get("model", "gemini-2.0-flash")
+                self.gemini_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
 
     async def generate_text(self, prompt: str) -> str:
         if self.model_type == "gemini":
@@ -37,20 +39,52 @@ class ModelManager:
         raise NotImplementedError(f"Unsupported model type: {self.model_type}")
 
     async def _gemini_generate(self, prompt: str) -> str:
+        """Generate text using Gemini REST API"""
         try:
-            # ✅ CORRECT: Use truly async method
-            response = await self.client.aio.models.generate_content(
-                model=self.model_info["model"],
-                contents=prompt
-            )
-            return response.text.strip()
-
-        except ServerError as e:
-            # ✅ FIXED: Raise the exception instead of returning it
-            raise e
+            url = f"{self.gemini_api_url}?key={self.gemini_api_key}"
+            
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 4096
+                }
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=120)
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise RuntimeError(f"Gemini API error {response.status}: {error_text}")
+                    
+                    result = await response.json()
+                    
+                    # Extract text from response
+                    candidates = result.get("candidates", [])
+                    if candidates and "content" in candidates[0]:
+                        parts = candidates[0]["content"].get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "").strip()
+                    
+                    raise RuntimeError(f"Unexpected Gemini response format: {result}")
+                    
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"Gemini connection error: {type(e).__name__}: {str(e)}")
         except Exception as e:
-            # ✅ Handle other potential errors
-            raise RuntimeError(f"Gemini generation failed: {str(e)}")
+            if "RuntimeError" in str(type(e)):
+                raise
+            raise RuntimeError(f"Gemini generation failed: {type(e).__name__}: {str(e)}")
 
     async def _ollama_generate(self, prompt: str) -> str:
         try:
