@@ -266,8 +266,8 @@ class BrowserAgent:
             
             log_step(f"{'[OK]' if success else '[FAIL]'} Result: {result[:100]}...")
             
-            # Small delay between actions
-            await asyncio.sleep(1)
+            # Delay between actions to avoid rate limits
+            await asyncio.sleep(3)
             current_step += 1
         
         # Determine final status

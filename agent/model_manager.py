@@ -140,11 +140,17 @@ class ModelManager:
         
         try:
             url = "https://api.groq.com/openai/v1/chat/completions"
+            
+            # Truncate prompt if too long (to reduce token usage)
+            max_prompt_chars = 12000  # ~3000 tokens
+            if len(prompt) > max_prompt_chars:
+                prompt = prompt[:max_prompt_chars] + "\n\n[TRUNCATED - respond based on available context]"
+            
             payload = {
                 "model": self.groq_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
-                "max_tokens": 2048  # Reduced to avoid rate limits
+                "max_tokens": 1024  # Reduced further to avoid rate limits
             }
             
             async with aiohttp.ClientSession() as session:
@@ -157,13 +163,14 @@ class ModelManager:
                     },
                     timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
-                    if response.status == 429 and retry_count < 3:
+                    if response.status == 429 and retry_count < 5:
                         # Rate limit - extract wait time and retry
                         error_text = await response.text()
                         wait_match = re.search(r'try again in (\d+\.?\d*)s', error_text)
-                        wait_time = float(wait_match.group(1)) if wait_match else 10
-                        print(f"    [RATE LIMIT] Waiting {wait_time:.1f}s before retry...")
-                        await asyncio.sleep(wait_time + 1)
+                        wait_time = float(wait_match.group(1)) if wait_match else 30
+                        wait_time = min(wait_time + 5, 60)  # Add buffer, cap at 60s
+                        print(f"    [RATE LIMIT] Waiting {wait_time:.1f}s before retry ({retry_count+1}/5)...")
+                        await asyncio.sleep(wait_time)
                         return await self._groq_generate(prompt, retry_count + 1)
                     
                     if response.status != 200:

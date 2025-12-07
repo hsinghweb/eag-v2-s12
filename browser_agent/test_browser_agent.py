@@ -95,25 +95,24 @@ async def test_form_filling():
         max_steps=25  # Allow up to 25 steps for login + form filling
     )
     
-    # Build instruction with login if credentials provided
+    # Build login instruction for use during submission
     login_instruction = ""
     if google_creds["email"] and google_creds["password"]:
         login_instruction = f"""
-    STEP 0 - GOOGLE LOGIN (if not already logged in):
-    If you see a Google login page or "Sign in" button:
-    1. Enter email: {google_creds['email']}
-    2. Click Next
-    3. Enter password: {google_creds['password']}
-    4. Click Next/Sign in
-    5. Wait for login to complete
-    
-    If already logged in, skip to form filling.
+    AFTER CLICKING SUBMIT - If Google Login is required:
+    1. Look for email input field and enter: {google_creds['email']}
+    2. Click Next button
+    3. Look for password input field and enter: {google_creds['password']}
+    4. Click Next/Sign in button
+    5. Wait for submission confirmation
     """
     
-    # Create the instruction with specific form data
+    # Create the instruction - FILL FIRST, THEN SUBMIT, THEN LOGIN IF NEEDED
     instruction = f"""
     Navigate to the Google Form at {GOOGLE_FORM_URL} and fill out the form completely.
-    {login_instruction}
+    
+    IMPORTANT: Fill the form FIRST, then submit. Login only happens during submission if required.
+    
     The form asks about a person. Fill in these EXACT values:
     
     1. "What is his/her email id?" -> Fill with: {form_data['email']}
@@ -123,16 +122,25 @@ async def test_form_filling():
     5. "Is he/she married?" -> Select: {form_data['married']} (click the {form_data['married']} radio button)
     6. "Which course is he/she taking?" -> Select: {form_data['course_taking']} from the dropdown
     
-    IMPORTANT STEPS:
-    1. First navigate to the URL
-    2. If login is required, complete the Google login first
-    3. For each text input field, find it by its question label and fill the value
-    4. For the radio button (married question), click on "{form_data['married']}"
-    5. For the dropdown (course selection), click it and select "{form_data['course_taking']}"
-    6. After filling ALL fields, click the Submit button
-    7. Wait for confirmation that the form was submitted
+    STEP-BY-STEP PROCESS:
     
-    Do NOT repeat actions on fields you have already filled.
+    PHASE 1 - FILL THE FORM (do this first, no login needed):
+    1. Navigate to the form URL
+    2. Find each text input field and fill it with the corresponding value
+    3. For radio buttons (married question), click on "{form_data['married']}"
+    4. For dropdown (course selection), click to open it and select "{form_data['course_taking']}"
+    
+    PHASE 2 - SUBMIT THE FORM:
+    5. After ALL fields are filled, click the Submit button
+    
+    PHASE 3 - LOGIN IF PROMPTED:
+    {login_instruction}
+    6. If you see "Your response has been recorded" or similar, the form is submitted - mark as DONE
+    
+    RULES:
+    - Do NOT click any login/sign-in buttons BEFORE filling the form
+    - Do NOT repeat actions on fields you have already filled
+    - Fill ALL fields before clicking Submit
     """
     
     try:
