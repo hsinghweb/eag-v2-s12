@@ -10,6 +10,16 @@
       "embedding_model": "models/embedding-001",
       "api_key_env": "GEMINI_API_KEY"
     },
+    "openai": {
+      "type": "openai",
+      "model": "gpt-4o-mini",
+      "api_key_env": "OPENAI_API_KEY"
+    },
+    "groq": {
+      "type": "groq",
+      "model": "llama-3.1-8b-instant",
+      "api_key_env": "GROQ_API_KEY"
+    },
     "phi4": {
       "type": "ollama",
       "model": "phi4",

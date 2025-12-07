@@ -23,19 +23,31 @@ class ModelManager:
         # Gemini API configuration
         if self.model_type == "gemini":
             self.gemini_api_key = os.getenv("GEMINI_API_KEY")
-            # Use GEMINI_API_URL if provided, otherwise construct default
             self.gemini_api_url = os.getenv("GEMINI_API_URL")
             if not self.gemini_api_url:
                 model_name = self.model_info.get("model", "gemini-2.0-flash")
                 self.gemini_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        
+        # OpenAI API configuration
+        elif self.model_type == "openai":
+            self.openai_api_key = os.getenv("OPENAI_API_KEY")
+            self.openai_model = self.model_info.get("model", "gpt-4o-mini")
+        
+        # Groq API configuration
+        elif self.model_type == "groq":
+            self.groq_api_key = os.getenv("GROQ_API_KEY")
+            self.groq_model = self.model_info.get("model", "llama-3.1-8b-instant")
 
     async def generate_text(self, prompt: str) -> str:
         if self.model_type == "gemini":
             return await self._gemini_generate(prompt)
-
+        elif self.model_type == "openai":
+            return await self._openai_generate(prompt)
+        elif self.model_type == "groq":
+            return await self._groq_generate(prompt)
         elif self.model_type == "ollama":
             return await self._ollama_generate(prompt)
-
+        
         raise NotImplementedError(f"Unsupported model type: {self.model_type}")
 
     async def _gemini_generate(self, prompt: str) -> str:
@@ -86,17 +98,93 @@ class ModelManager:
                 raise
             raise RuntimeError(f"Gemini generation failed: {type(e).__name__}: {str(e)}")
 
-    async def _ollama_generate(self, prompt: str) -> str:
+    async def _openai_generate(self, prompt: str) -> str:
+        """Generate text using OpenAI API"""
         try:
-            # ✅ Use aiohttp for truly async requests
-            import aiohttp
+            url = "https://api.openai.com/v1/chat/completions"
+            payload = {
+                "model": self.openai_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 4096
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.openai_api_key}"
+                    },
+                    timeout=aiohttp.ClientTimeout(total=120)
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise RuntimeError(f"OpenAI API error {response.status}: {error_text}")
+                    
+                    result = await response.json()
+                    return result["choices"][0]["message"]["content"].strip()
+                    
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"OpenAI connection error: {type(e).__name__}: {str(e)}")
+        except Exception as e:
+            if "RuntimeError" in str(type(e)):
+                raise
+            raise RuntimeError(f"OpenAI generation failed: {type(e).__name__}: {str(e)}")
+
+    async def _groq_generate(self, prompt: str) -> str:
+        """Generate text using Groq API (free tier available)"""
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            payload = {
+                "model": self.groq_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 4096
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.groq_api_key}"
+                    },
+                    timeout=aiohttp.ClientTimeout(total=120)
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise RuntimeError(f"Groq API error {response.status}: {error_text}")
+                    
+                    result = await response.json()
+                    return result["choices"][0]["message"]["content"].strip()
+                    
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"Groq connection error: {type(e).__name__}: {str(e)}")
+        except Exception as e:
+            if "RuntimeError" in str(type(e)):
+                raise
+            raise RuntimeError(f"Groq generation failed: {type(e).__name__}: {str(e)}")
+
+    async def _ollama_generate(self, prompt: str) -> str:
+        """Generate text using Ollama (local)"""
+        try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     self.model_info["url"]["generate"],
-                    json={"model": self.model_info["model"], "prompt": prompt, "stream": False}
+                    json={"model": self.model_info["model"], "prompt": prompt, "stream": False},
+                    timeout=aiohttp.ClientTimeout(total=300)  # 5 min timeout for local models
                 ) as response:
-                    response.raise_for_status()
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise RuntimeError(f"Ollama error {response.status}: {error_text}")
                     result = await response.json()
                     return result["response"].strip()
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"Ollama connection error: {type(e).__name__}: {str(e)}")
         except Exception as e:
-            raise RuntimeError(f"Ollama generation failed: {str(e)}")
+            if "RuntimeError" in str(type(e)):
+                raise
+            raise RuntimeError(f"Ollama generation failed: {type(e).__name__}: {str(e)}")
