@@ -4,23 +4,16 @@ Test script for BrowserAgent - Google Form Filling
 Usage:
     python -m browser_agent.test_browser_agent
     
-Or from project root:
-    python browser_agent/test_browser_agent.py
-    
-Required .env variables:
+Reads form data from INFO.md file in project root.
+Google credentials should be in .env:
     GOOGLE_EMAIL=your_email@gmail.com
     GOOGLE_PASSWORD=your_password
-    FORM_EMAIL=submission_email@example.com
-    FORM_DOB=15-08-1995
-    FORM_COURSE=EAG Session 12
-    FORM_MASTER_NAME=Agentic AI Master
-    FORM_MARRIED=No
-    FORM_COURSE_TAKING=EAG
 """
 
 import asyncio
 import sys
 import os
+import re
 from pathlib import Path
 
 # Fix encoding for Windows terminal
@@ -43,15 +36,62 @@ from browserMCP.mcp_utils.utils import stop_browser_session
 GOOGLE_FORM_URL = "https://forms.gle/6Nc6QaaJyDvePxLv7"
 
 
+def load_info_file():
+    """Load and parse the INFO.md file"""
+    info_path = project_root / "INFO.md"
+    if not info_path.exists():
+        print(f"[WARN] INFO.md not found at {info_path}")
+        return None
+    
+    content = info_path.read_text(encoding='utf-8')
+    print(f"[INFO] Loaded INFO.md:\n{content}")
+    return content
+
+
+def parse_info_content(content):
+    """Parse INFO.md content into question-answer pairs"""
+    data = {}
+    lines = content.strip().split('\n')
+    
+    current_question = None
+    for line in lines:
+        line = line.strip()
+        if line.startswith('*'):
+            # This is a question
+            current_question = line.lstrip('* ').strip()
+        elif current_question and line:
+            # This is an answer
+            data[current_question] = line
+            current_question = None
+    
+    return data
+
+
 def get_form_data():
-    """Load form data from environment variables"""
+    """Load form data from INFO.md file"""
+    content = load_info_file()
+    if not content:
+        # Fallback to env vars
+        return {
+            "master_name": os.getenv("FORM_MASTER_NAME", "Unknown"),
+            "dob": os.getenv("FORM_DOB", "01-01-2000"),
+            "married": os.getenv("FORM_MARRIED", "No"),
+            "email": os.getenv("FORM_EMAIL", "test@example.com"),
+            "course": os.getenv("FORM_COURSE", "EAG"),
+            "course_taking": os.getenv("FORM_COURSE_TAKING", "EAG"),
+        }
+    
+    parsed = parse_info_content(content)
+    print(f"[INFO] Parsed data: {parsed}")
+    
+    # Map parsed questions to our keys
     return {
-        "email": os.getenv("FORM_EMAIL", "test@example.com"),
-        "dob": os.getenv("FORM_DOB", "15-08-1995"),
-        "course": os.getenv("FORM_COURSE", "EAG Session 12"),
-        "master_name": os.getenv("FORM_MASTER_NAME", "Agentic AI Master"),
-        "married": os.getenv("FORM_MARRIED", "No"),
-        "course_taking": os.getenv("FORM_COURSE_TAKING", "EAG"),
+        "master_name": parsed.get("What is the name of your Master?", "Unknown"),
+        "dob": parsed.get("What is his/her Date of Birth?", "01-01-2000"),
+        "married": parsed.get("Is he/she married?", "No"),
+        "email": parsed.get("What is his/her email id?", "test@example.com"),
+        "course": parsed.get("What course is he/her in?", "EAG"),
+        "course_taking": parsed.get("Which course is he/she taking?", "EAG"),
     }
 
 
@@ -95,35 +135,41 @@ async def test_form_filling():
         max_steps=25  # Allow up to 25 steps for login + form filling
     )
     
-    # Create the instruction with EXACT question-to-value mapping
+    # Load raw INFO.md content for LLM context
+    info_content = load_info_file() or ""
+    
+    # Create the instruction with INFO.md as the source of truth
     instruction = f"""
 TASK: Fill Google Form at {GOOGLE_FORM_URL}
 
-EXACT FIELD MAPPINGS (match by question text keywords):
-- Question contains "email" -> enter: {form_data['email']}
-- Question contains "Date of Birth" or "DOB" -> enter: {form_data['dob']}
-- Question contains "course is he/her in" or "what course" -> enter: {form_data['course']}
-- Question contains "Master" or "name of your" -> enter: {form_data['master_name']}
-- Question contains "married" -> click radio button: {form_data['married']}
-- Question contains "taking" or "dropdown" with options ERA/EAG/EPAi -> select: {form_data['course_taking']}
+=== SOURCE OF TRUTH (from INFO.md) ===
+{info_content}
+=== END SOURCE ===
+
+EXTRACTED ANSWERS (use these EXACT values):
+- "What is the name of your Master?" → {form_data['master_name']}
+- "What is his/her Date of Birth?" → {form_data['dob']}
+- "Is he/she married?" → {form_data['married']}
+- "What is his/her email id?" → {form_data['email']}
+- "What course is he/her in?" → {form_data['course']}
+- "Which course is he/she taking?" → {form_data['course_taking']}
+
+FIELD TYPE RULES:
+- Text questions (email, DOB, Master name, course): use input_text
+- "Is he/she married?" (Yes/No): CLICK the radio button, do NOT type
+- "Which course is he/she taking?" (dropdown): use select_dropdown_option
 
 PROCESS:
-1. Fill ALL text fields by matching question keywords
-2. Select radio button for married question ({form_data['married']})
-3. Select dropdown option ({form_data['course_taking']})
+1. Fill ALL text fields first (skip radio buttons and dropdowns for now)
+2. Handle the "married" question by clicking the "{form_data['married']}" radio button
+3. Handle the "course taking" dropdown by selecting "{form_data['course_taking']}"
 4. Click Submit button
-5. IF Google login page appears:
-   - Enter email: {google_creds['email']}
-   - Click Next
-   - Enter password: {google_creds['password']}
-   - Click Sign in
-6. Mark DONE when you see "response recorded" or form is submitted
+5. IF Google login appears after submit:
+   - Email: {google_creds['email']}
+   - Password: {google_creds['password']}
+6. When you see "response recorded" → return done
 
-CRITICAL RULES:
-- Match questions by KEYWORDS, not by position (form order is random)
-- Use the EXACT values provided above
-- After Submit, if login appears, complete the login
-- Do NOT skip any field
+IMPORTANT: Match form questions to the SOURCE OF TRUTH above. Use EXACT values.
 """
     
     try:
