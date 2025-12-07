@@ -274,85 +274,166 @@ async def fill_google_form():
     filled_count = 0
     used_indices = []
     
-    for i, question in enumerate(questions_on_form, 1):
-        print(f"\n  [{i}/{len(questions_on_form)}] Question: \"{question}\"")
-        
-        # Use LLM to match this question
-        print("    🤖 Asking LLM for match...")
+    # Keep track of which inputs are for dropdowns vs regular text
+    dropdown_questions = []
+    text_questions = []
+    radio_questions = []
+    
+    # First pass: categorize all questions
+    print("\n  🔍 First pass: Categorizing all questions...")
+    question_matches = []
+    for question in questions_on_form:
         match_result = await match_question_with_llm(question, info_content, info_data, model_manager)
+        question_matches.append({
+            "question": question,
+            "answer": match_result["answer"],
+            "field_type": match_result["field_type"],
+            "confidence": match_result["confidence"]
+        })
+        print(f"    • {question[:40]}... → {match_result['field_type']}")
+    
+    # Separate by type
+    for qm in question_matches:
+        if qm["field_type"] == "dropdown":
+            dropdown_questions.append(qm)
+        elif qm["field_type"] == "radio":
+            radio_questions.append(qm)
+        else:
+            text_questions.append(qm)
+    
+    print(f"\n  📊 Question types:")
+    print(f"    - Text fields: {len(text_questions)}")
+    print(f"    - Radio buttons: {len(radio_questions)}")
+    print(f"    - Dropdowns: {len(dropdown_questions)}")
+    print(f"    - Available inputs: {len(available_indices)}")
+    
+    # Second pass: Fill in smart order (text first, then dropdowns)
+    print("\n  📝 Second pass: Filling fields...")
+    
+    # Fill text fields first (they use visible inputs)
+    for i, qm in enumerate(text_questions, 1):
+        question = qm["question"]
+        answer = qm["answer"]
         
-        answer = match_result["answer"]
-        field_type = match_result["field_type"]
-        confidence = match_result["confidence"]
+        print(f"\n  [{filled_count+1}] TEXT: \"{question[:50]}...\"")
+        print(f"    Answer: {answer}")
         
-        print(f"    ✓ Answer: {answer} (type: {field_type}, confidence: {confidence})")
-        
-        if field_type == "text":
-            # Fill text field - use next available index
-            if available_indices:
-                idx = available_indices.pop(0)  # Take first available
-                used_indices.append(idx)
-                print(f"    📝 Filling text input at index {idx}...")
-                await handle_tool_call("input_text", {"index": idx, "text": answer})
-                filled_count += 1
-                print(f"    ✅ Filled! ({len(available_indices)} inputs remaining)")
-                await asyncio.sleep(0.8)
-            else:
-                print("    ⚠️  Warning: No more text input indices available")
-        
-        elif field_type == "radio":
-            # Click radio button
-            print(f"    🔘 Looking for radio button '{answer}'...")
-            # Get fresh elements
-            elem_result = await handle_tool_call("get_interactive_elements", {
-                "viewport_mode": "all",
-                "structured_output": False
-            })
-            elements_text = elem_result[0].get("text", "") if elem_result else ""
-            
-            # Try to find the answer text in elements
-            radio_match = re.search(rf'\[(\d+)\]<div[^>]*>{re.escape(answer)}<', elements_text, re.IGNORECASE)
-            
-            if radio_match:
-                radio_idx = int(radio_match.group(1))
-                print(f"    📍 Found at index {radio_idx}, clicking...")
-                await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                filled_count += 1
-                print(f"    ✅ Selected!")
-            else:
-                print(f"    ⚠️  Exact match not found, trying sequential search...")
-                # Fallback: try clicking elements one by one to find radio
-                last_used = used_indices[-1] if used_indices else 0
-                for radio_idx in range(last_used + 1, last_used + 10):
-                    try:
-                        await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                        print(f"    ✅ Clicked radio at index {radio_idx}")
-                        filled_count += 1
-                        break
-                    except Exception:
-                        continue
-            
+        if available_indices:
+            idx = available_indices.pop(0)
+            used_indices.append(idx)
+            print(f"    📝 Filling text input at index {idx}...")
+            await handle_tool_call("input_text", {"index": idx, "text": answer})
+            filled_count += 1
+            print(f"    ✅ Filled! ({len(available_indices)} inputs remaining)")
             await asyncio.sleep(0.8)
+        else:
+            print("    ⚠️  Warning: No more text input indices available")
+    
+    # Fill radio buttons
+    for qm in radio_questions:
+        question = qm["question"]
+        answer = qm["answer"]
         
-        elif field_type == "dropdown":
-            # Handle dropdown - THE BREAKTHROUGH SOLUTION
-            print(f"    🎯 DROPDOWN: Using breakthrough method!")
-            print(f"       (Typing into hidden input field)")
+        print(f"\n  [{filled_count+1}] RADIO: \"{question[:50]}...\"")
+        print(f"    Answer: {answer}")
+        print(f"    🔘 Looking for radio button '{answer}'...")
+        
+        # Get fresh elements
+        elem_result = await handle_tool_call("get_interactive_elements", {
+            "viewport_mode": "all",
+            "structured_output": False
+        })
+        elements_text = elem_result[0].get("text", "") if elem_result else ""
+        
+        # Try to find the answer text in elements
+        radio_match = re.search(rf'\[(\d+)\]<div[^>]*>{re.escape(answer)}<', elements_text, re.IGNORECASE)
+        
+        if radio_match:
+            radio_idx = int(radio_match.group(1))
+            print(f"    📍 Found at index {radio_idx}, clicking...")
+            await handle_tool_call("click_element_by_index", {"index": radio_idx})
+            filled_count += 1
+            print(f"    ✅ Selected!")
+        else:
+            print(f"    ⚠️  Exact match not found, trying sequential search...")
+            # Fallback: try clicking elements one by one
+            last_used = used_indices[-1] if used_indices else 0
+            for radio_idx in range(last_used + 1, last_used + 10):
+                try:
+                    await handle_tool_call("click_element_by_index", {"index": radio_idx})
+                    print(f"    ✅ Clicked radio at index {radio_idx}")
+                    filled_count += 1
+                    break
+                except Exception:
+                    continue
+        
+        await asyncio.sleep(0.8)
+    
+    # Fill dropdowns - THE BREAKTHROUGH SOLUTION + FALLBACK
+    for qm in dropdown_questions:
+        question = qm["question"]
+        answer = qm["answer"]
+        
+        print(f"\n  [{filled_count+1}] DROPDOWN: \"{question[:50]}...\"")
+        print(f"    Answer: {answer}")
+        print(f"    🎯 Using breakthrough method: hidden input field")
+        
+        # Get fresh elements to see current state
+        elem_result = await handle_tool_call("get_interactive_elements", {
+            "viewport_mode": "all",
+            "structured_output": False
+        })
+        elements_text = elem_result[0].get("text", "") if elem_result else ""
+        
+        # Re-scan for all text inputs (in case form structure changed)
+        all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+        current_available = [int(x) for x in all_text_inputs if int(x) not in used_indices]
+        
+        print(f"    📍 Current available indices: {current_available}")
+        
+        if current_available:
+            dropdown_input_idx = current_available[0]
+            used_indices.append(dropdown_input_idx)
+            print(f"    📍 Using hidden input at index {dropdown_input_idx}")
             
-            # Use next available index (dropdowns have hidden text inputs)
-            if available_indices:
-                dropdown_input_idx = available_indices.pop(0)  # Take first available
-                used_indices.append(dropdown_input_idx)
-                print(f"    📍 Using hidden input at index {dropdown_input_idx}")
-                
-                # Type directly into the hidden input field - this is the key!
-                print(f"    ⌨️  Typing '{answer}' into hidden input...")
-                await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": answer})
-                filled_count += 1
-                print(f"    ✅ Dropdown filled! ({len(available_indices)} inputs remaining)")
-                await asyncio.sleep(1)
-            else:
-                print(f"    ⚠️  No more input indices available for dropdown")
+            # Type directly into the hidden input field - this is the key!
+            print(f"    ⌨️  Typing '{answer}' into hidden input...")
+            await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": answer})
+            filled_count += 1
+            print(f"    ✅ Dropdown filled!")
+            await asyncio.sleep(1)
+        else:
+            print(f"    ❌ ERROR: No available input index for dropdown!")
+            print(f"    ⚠️  This may be the 250 marks surprise element!")
+            print(f"    🔄 Attempting alternative: Click dropdown UI...")
+            
+            # Try to find and click listbox
+            listbox_match = re.search(r'\[(\d+)\]<div[^>]*role=["\']listbox', elements_text, re.IGNORECASE)
+            if listbox_match:
+                listbox_idx = int(listbox_match.group(1))
+                print(f"    📍 Found listbox at index {listbox_idx}, clicking...")
+                try:
+                    await handle_tool_call("click_element_by_index", {"index": listbox_idx})
+                    await asyncio.sleep(1)
+                    
+                    # Look for the option with our answer
+                    elem_result = await handle_tool_call("get_interactive_elements", {
+                        "viewport_mode": "all",
+                        "structured_output": False
+                    })
+                    elements_text = elem_result[0].get("text", "") if elem_result else ""
+                    
+                    option_match = re.search(rf'\[(\d+)\][^[]*{re.escape(answer)}', elements_text, re.IGNORECASE)
+                    if option_match:
+                        option_idx = int(option_match.group(1))
+                        print(f"    📍 Found option '{answer}' at index {option_idx}, clicking...")
+                        await handle_tool_call("click_element_by_index", {"index": option_idx})
+                        filled_count += 1
+                        print(f"    ✅ Dropdown selected via click method!")
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    print(f"    ❌ Alternative method failed: {e}")
+                    print(f"    ⚠️  CRITICAL: Dropdown not filled - form may not submit!")
     
     # Summary
     print(f"\n{'='*60}")
