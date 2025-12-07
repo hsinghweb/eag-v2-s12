@@ -27,10 +27,10 @@
         "embed": "http://localhost:11434/api/embeddings"
       }
     },
-    "gemma3:12b": {
+    "gemma2:2b": {
       "type": "ollama",
-      "model": "gemma3:12b",
-      "embedding_model": "gemma3:12b",
+      "model": "gemma2:2b",
+      "embedding_model": "gemma2:2b",
       "url": {
         "generate": "http://localhost:11434/api/generate",
         "embed": "http://localhost:11434/api/embeddings"
