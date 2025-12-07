@@ -356,7 +356,11 @@ async def fill_google_form():
     
     # Summary
     print(f"\n{'='*60}")
-    print(f"📊 SUMMARY: Filled {filled_count} out of {len(questions_on_form)} fields")
+    print(f"📊 FILLING SUMMARY")
+    print(f"{'='*60}")
+    print(f"✅ Filled {filled_count} out of {len(questions_on_form)} fields")
+    print(f"⚠️  Note: Form may have dynamic/surprise elements")
+    print(f"⚠️  Please verify all fields in browser before final submission")
     print(f"{'='*60}")
     
     # Step 5: Submit
@@ -400,31 +404,56 @@ async def fill_google_form():
     
     if is_success:
         print("\n" + "=" * 60)
-        print("🎉 FORM SUBMITTED SUCCESSFULLY!")
+        print("🎉🎉🎉 FORM SUBMITTED SUCCESSFULLY! 🎉🎉🎉")
         print("=" * 60)
-        print(f"✅ Filled {filled_count}/{len(questions_on_form)} fields")
-        print(f"✅ Form submitted")
-        print(f"✅ Submission confirmed")
+        print(f"✅ Questions found: {len(questions_on_form)}")
+        print(f"✅ Fields filled: {filled_count}/{len(questions_on_form)}")
+        print(f"✅ Form submitted: YES")
+        print(f"✅ Submission confirmed: YES")
+        print(f"✅ Response recorded by Google Forms")
         print("=" * 60)
+        print("\n🌐 Browser will stay open for verification...")
         return {"status": "success", "message": "Form submitted"}
     else:
         # Print what we see for debugging
         print(f"\n  📄 Page text: {final_text[:200]}...")
         print(f"\n  🔍 Elements: {elem_text[:200]}...")
         print("\n" + "=" * 60)
-        print("⚠️  FORM FILLED AND SUBMITTED")
+        print("⚠️  FORM FILLED AND SUBMITTED - CHECK BROWSER")
         print("=" * 60)
-        print(f"✅ Filled {filled_count}/{len(questions_on_form)} fields")
-        print(f"✅ Submit button clicked")
-        print(f"⚠️  Please verify submission in browser")
+        print(f"✅ Questions found: {len(questions_on_form)}")
+        print(f"✅ Fields filled: {filled_count}/{len(questions_on_form)}")
+        print(f"✅ Submit button clicked: YES")
+        print(f"⚠️  Submission status: VERIFY IN BROWSER")
         print("=" * 60)
+        print("\n🌐 Browser will stay open for verification...")
         return {"status": "success", "message": "Form submitted (verify in browser)"}
 
 
 async def main():
     try:
         result = await fill_google_form()
+        
+        # Keep browser open to show submission
+        if result.get("status") == "success":
+            print("\n" + "="*60)
+            print("🌐 BROWSER KEPT OPEN TO VERIFY SUBMISSION")
+            print("="*60)
+            print("📋 Please check the browser window to confirm:")
+            print("   - Form submission was successful")
+            print("   - All required fields were filled")
+            print("   - No error messages are shown")
+            print("\n💡 Press Ctrl+C when done reviewing, or close this window")
+            print("="*60)
+            
+            # Keep the script running to keep browser open
+            try:
+                await asyncio.sleep(300)  # Wait 5 minutes
+            except KeyboardInterrupt:
+                print("\n👋 Closing browser...")
+        
         return 0 if result.get("status") == "success" else 1
+        
     except Exception as e:
         print(f"\n[ERROR] {e}")
         import traceback
