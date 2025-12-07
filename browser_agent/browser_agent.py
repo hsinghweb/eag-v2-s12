@@ -266,8 +266,8 @@ class BrowserAgent:
             
             log_step(f"{'[OK]' if success else '[FAIL]'} Result: {result[:100]}...")
             
-            # Delay between actions to avoid rate limits
-            await asyncio.sleep(3)
+            # Small delay between actions
+            await asyncio.sleep(1)
             current_step += 1
         
         # Determine final status
@@ -382,31 +382,31 @@ Click indices used: {list(clicked_indices) if clicked_indices else 'None'}
         # Available tools summary
         tools_info = self._get_tools_summary()
         
-        full_prompt = f"""{prompt_template}
+        # Truncate page state to reduce tokens
+        truncated_page_state = page_state[:4000] if len(page_state) > 4000 else page_state
+        
+        full_prompt = f"""You are a browser automation agent. Analyze the page and return the next action as JSON.
 
-## Current Task
-{instruction}
+TASK: {instruction[:1000]}
 
-## Current Page State
-{page_state[:8000]}
+PAGE STATE:
+{truncated_page_state}
 
+ALREADY DONE (DO NOT REPEAT):
 {indices_summary}
-
-## ALL Previous Steps (Review to avoid repetition!)
 {steps_summary}
 
-## Current Step Number
-{current_step} of {self.max_steps}
+Step {current_step}/{self.max_steps}
 
-## Available Browser Tools
-{tools_info}
+TOOLS: input_text(index, text), click_element_by_index(index), select_dropdown_option(index, option_text), done(success, message)
 
-CRITICAL: Review the Previous Steps above. DO NOT repeat actions you've already done!
-If a field was already filled (input_text to an index), DO NOT fill it again.
-Progress to the NEXT unfilled field or action.
+RULES:
+1. Match questions by text content, not position (form order is random)
+2. DO NOT repeat filled fields
+3. Return ONLY valid JSON: {{"action": "...", "params": {{}}, "reasoning": "..."}}
+4. When all fields filled, click Submit, then mark done
 
-Now analyze the page and decide the next action. Return JSON only.
-"""
+Next action:"""
         
         try:
             time.sleep(1)  # Rate limiting
