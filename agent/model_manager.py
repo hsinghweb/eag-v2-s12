@@ -133,15 +133,18 @@ class ModelManager:
                 raise
             raise RuntimeError(f"OpenAI generation failed: {type(e).__name__}: {str(e)}")
 
-    async def _groq_generate(self, prompt: str) -> str:
-        """Generate text using Groq API (free tier available)"""
+    async def _groq_generate(self, prompt: str, retry_count: int = 0) -> str:
+        """Generate text using Groq API (free tier available) with auto-retry for rate limits"""
+        import asyncio
+        import re
+        
         try:
             url = "https://api.groq.com/openai/v1/chat/completions"
             payload = {
                 "model": self.groq_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
-                "max_tokens": 4096
+                "max_tokens": 2048  # Reduced to avoid rate limits
             }
             
             async with aiohttp.ClientSession() as session:
@@ -154,6 +157,15 @@ class ModelManager:
                     },
                     timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
+                    if response.status == 429 and retry_count < 3:
+                        # Rate limit - extract wait time and retry
+                        error_text = await response.text()
+                        wait_match = re.search(r'try again in (\d+\.?\d*)s', error_text)
+                        wait_time = float(wait_match.group(1)) if wait_match else 10
+                        print(f"    [RATE LIMIT] Waiting {wait_time:.1f}s before retry...")
+                        await asyncio.sleep(wait_time + 1)
+                        return await self._groq_generate(prompt, retry_count + 1)
+                    
                     if response.status != 200:
                         error_text = await response.text()
                         raise RuntimeError(f"Groq API error {response.status}: {error_text}")

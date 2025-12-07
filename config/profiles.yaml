@@ -21,7 +21,7 @@ memory:
     structure: "date"  # Indicates we're using date-based directory structure
 
 llm:
-  text_generation: gemini #gemini #phi4-reasoning:14b #qwen2.5:32b-instruct-q4_0
+  text_generation: groq #gemini #phi4-reasoning:14b #qwen2.5:32b-instruct-q4_0
   embedding: nomic
 
 persona:
