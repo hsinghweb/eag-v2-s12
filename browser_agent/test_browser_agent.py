@@ -1,8 +1,15 @@
 """
 Test script for BrowserAgent - Google Form Filling
 
-Uses deterministic question-answer matching based on page structure analysis.
-This approach reads the form layout and fills fields in the correct order.
+BREAKTHROUGH SOLUTION for Google Forms dropdown issue:
+- Instead of clicking dropdown UI elements, type directly into the hidden input field
+- This bypasses all the problematic Google Forms dropdown behavior
+
+Approach:
+1. Fill all standard text fields (email, name, DOB, course)
+2. Click the radio button (Yes for married)
+3. **Type into the hidden input field for the dropdown** (this is the key!)
+4. Submit the form
 
 Usage:
     python -m browser_agent.test_browser_agent
@@ -10,7 +17,6 @@ Usage:
 
 import asyncio
 import sys
-import os
 from pathlib import Path
 
 if sys.platform == 'win32':
@@ -123,80 +129,113 @@ async def fill_google_form():
     text_questions = [q for q in questions_order if q in ["master", "course_in", "email", "dob"]]
     print(f"  Text questions order: {text_questions}")
     
-    # Step 3: Fill text fields
-    print("\n[STEP 3] Filling text fields...")
-    for i, question_key in enumerate(text_questions):
-        if i >= len(text_indices):
-            break
-        
-        idx = text_indices[i]
-        answer = answers[question_key]
-        
-        print(f"  [{idx}] {question_key} → {answer}")
-        await handle_tool_call("input_text", {"index": idx, "text": answer})
-        await asyncio.sleep(0.5)
+    # Step 3: Fill Email field
+    print("\n[STEP 3] Filling Email field...")
+    email_answer = answers["email"]
+    print(f"  Email → {email_answer}")
+    await handle_tool_call("input_text", {"index": text_indices[0] if text_indices else 0, "text": email_answer})
+    await asyncio.sleep(0.5)
     
-    # Step 4: Handle dropdown
-    print("\n[STEP 4] Selecting dropdown (EAG)...")
-    # Get fresh elements
+    # Step 4: Fill Master's name
+    print("\n[STEP 4] Filling Master's name...")
+    master_answer = answers["master"]
+    print(f"  Master → {master_answer}")
+    await handle_tool_call("input_text", {"index": text_indices[1] if len(text_indices) > 1 else 1, "text": master_answer})
+    await asyncio.sleep(0.5)
+    
+    # Step 5: Fill Date of Birth
+    print("\n[STEP 5] Filling Date of Birth...")
+    dob_answer = answers["dob"]
+    print(f"  DOB → {dob_answer}")
+    await handle_tool_call("input_text", {"index": text_indices[2] if len(text_indices) > 2 else 2, "text": dob_answer})
+    await asyncio.sleep(0.5)
+    
+    # Step 6: Fill Course (text field)
+    print("\n[STEP 6] Filling Course field...")
+    course_answer = answers["course_in"]
+    print(f"  Course → {course_answer}")
+    await handle_tool_call("input_text", {"index": text_indices[3] if len(text_indices) > 3 else 3, "text": course_answer})
+    await asyncio.sleep(0.5)
+    
+    # Step 7: Handle radio button (married - Yes)
+    print("\n[STEP 7] Selecting radio button (Yes for married)...")
+    # Get fresh elements to find radio button
     elem_result = await handle_tool_call("get_interactive_elements", {
         "viewport_mode": "all",
         "structured_output": False
     })
     elements_text = elem_result[0].get("text", "") if elem_result else ""
     
-    # Try to select EAG from dropdown options
-    try:
-        await handle_tool_call("select_dropdown_option", {
-            "index": 0,
-            "option_text": "EAG"
-        })
-        print("  Selected EAG via dropdown")
-    except:
-        # Find EAG in elements and click it
-        for idx in range(10, 20):
-            if f"[{idx}]" in elements_text:
-                result = await handle_tool_call("click_element_by_index", {"index": idx})
-                result_text = str(result) if result else ""
-                if "EAG" in result_text:
-                    print(f"  Clicked EAG at index {idx}")
-                    break
+    # Find "Yes" radio button - usually appears early in the form
+    radio_match = re.search(r'\[(\d+)\]<div[^>]*>Yes<', elements_text)
+    if radio_match:
+        radio_idx = int(radio_match.group(1))
+        print(f"  Clicking Yes radio at index {radio_idx}")
+        await handle_tool_call("click_element_by_index", {"index": radio_idx})
+    else:
+        # Try common indices for radio buttons
+        for radio_idx in range(4, 8):
+            try:
+                await handle_tool_call("click_element_by_index", {"index": radio_idx})
+                print(f"  Clicked potential Yes radio at index {radio_idx}")
+                break
+            except Exception:
+                continue
+    
     await asyncio.sleep(0.5)
     
-    # Step 5: Handle radio button (married)
-    print("\n[STEP 5] Selecting radio button (Yes for married)...")
-    await handle_tool_call("scroll_up", {"pixels": 500})
-    await asyncio.sleep(1)
+    # Step 8: Handle dropdown - THE BREAKTHROUGH SOLUTION
+    print("\n[STEP 8] Filling dropdown (Which course - EAG)...")
+    print("  Using breakthrough method: typing into hidden input field")
     
-    # Get updated elements
+    # Get fresh elements to find the hidden dropdown input
     elem_result = await handle_tool_call("get_interactive_elements", {
         "viewport_mode": "all",
         "structured_output": False
     })
-    new_elements = elem_result[0].get("text", "") if elem_result else ""
+    elements_text = elem_result[0].get("text", "") if elem_result else ""
     
-    # Try clicking early indices to find Yes radio
-    for radio_idx in range(1, 10):
-        if f"[{radio_idx}]" in new_elements:
-            result = await handle_tool_call("click_element_by_index", {"index": radio_idx})
-            result_text = result[0].get("text", "") if result else ""
-            if "yes" in result_text.lower() or radio_idx in [2, 3, 4, 5]:
-                print(f"  Clicked index {radio_idx}")
-                break
+    # Find the hidden input field for the dropdown
+    # It's usually an input type='text' that's associated with the dropdown
+    # Look for inputs after the visible text inputs (usually index 4+)
+    dropdown_input_idx = None
+    text_inputs_all = re.findall(r'\[(\d+)\]<input type=\'text\'', elements_text)
     
-    await asyncio.sleep(0.5)
+    # The dropdown's hidden input is typically after the 4 visible text inputs
+    if len(text_inputs_all) > 4:
+        dropdown_input_idx = int(text_inputs_all[4])  # 5th text input (index 4)
+        print(f"  Found dropdown hidden input at index {dropdown_input_idx}")
+    else:
+        # Fallback: try common indices
+        dropdown_input_idx = 5
+        print(f"  Using fallback dropdown input index {dropdown_input_idx}")
     
-    # Step 6: Submit
-    print("\n[STEP 6] Submitting form...")
-    await handle_tool_call("scroll_down", {"pixels": 800})
+    # Type directly into the hidden input field - this is the key!
+    course_taking_answer = answers["course_taking"]
+    print(f"  Typing '{course_taking_answer}' into hidden dropdown input...")
+    await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": course_taking_answer})
     await asyncio.sleep(1)
+    
+    # Step 9: Submit
+    print("\n[STEP 9] Submitting form...")
+    # Get fresh elements to find Submit button
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    elements_text = elem_result[0].get("text", "") if elem_result else ""
     
     # Find Submit button
     submit_match = re.search(r'\[(\d+)\]<span>Submit', elements_text)
-    submit_idx = int(submit_match.group(1)) if submit_match else 15
-    print(f"  Clicking Submit at index {submit_idx}")
+    if submit_match:
+        submit_idx = int(submit_match.group(1))
+    else:
+        # Try to find any button-like element with "Submit"
+        submit_match = re.search(r'\[(\d+)\][^[]*submit', elements_text, re.IGNORECASE)
+        submit_idx = int(submit_match.group(1)) if submit_match else 10
     
-    result = await handle_tool_call("click_element_by_index", {"index": submit_idx})
+    print(f"  Clicking Submit at index {submit_idx}")
+    await handle_tool_call("click_element_by_index", {"index": submit_idx})
     await asyncio.sleep(5)  # Wait longer for submission
     
     # Step 7: Verify submission

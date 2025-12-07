@@ -10,6 +10,7 @@ BANNER = """
 ──────────────────────────────────────────────────────
 🔸  Agentic Query Assistant  🔸
 Type your question and press Enter.
+Type 'fill form' to automatically fill the Google Form.
 Type 'exit' or 'quit' to leave.
 ──────────────────────────────────────────────────────
 """
@@ -50,6 +51,20 @@ async def interactive() -> None:
             if query.lower() in {"exit", "quit"}:
                 log_step("Goodbye!", symbol="👋")
                 break
+            
+            # Special command to fill the Google Form
+            if query.lower() in {"fill form", "fillform", "form"}:
+                log_step("Filling Google Form...", symbol="📝")
+                try:
+                    from browser_agent.test_browser_agent import fill_google_form
+                    result = await fill_google_form()
+                    response = f"✅ {result.get('message', 'Form filled successfully')}"
+                    conversation_history.append((query, response))
+                    log_step("Form filling complete", symbol="✅")
+                except Exception as form_error:
+                    log_error("Form filling failed", form_error)
+                    conversation_history.append((query, f"❌ Form filling failed: {str(form_error)}"))
+                continue
 
             # Construct context string from past rounds
             context_prefix = ""
