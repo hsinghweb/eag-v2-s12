@@ -318,16 +318,32 @@ async def fill_google_form():
         print(f"\n  [{filled_count+1}] TEXT: \"{question[:50]}...\"")
         print(f"    Answer: {answer}")
         
-        if available_indices:
-            idx = available_indices.pop(0)
-            used_indices.append(idx)
-            print(f"    📝 Filling text input at index {idx}...")
-            await handle_tool_call("input_text", {"index": idx, "text": answer})
-            filled_count += 1
-            print(f"    ✅ Filled! ({len(available_indices)} inputs remaining)")
-            await asyncio.sleep(0.8)
-        else:
-            print("    ⚠️  Warning: No more text input indices available")
+        # Try multiple indices until one works (skip hidden elements)
+        filled_this = False
+        attempts = 0
+        max_attempts = len(available_indices) + 5  # Try more than available
+        
+        while not filled_this and available_indices and attempts < max_attempts:
+            idx = available_indices.pop(0) if available_indices else (used_indices[-1] + 1 if used_indices else 0)
+            attempts += 1
+            
+            try:
+                print(f"    📝 Trying text input at index {idx}...")
+                await handle_tool_call("input_text", {"index": idx, "text": answer})
+                used_indices.append(idx)
+                filled_count += 1
+                filled_this = True
+                print(f"    ✅ Filled! ({len(available_indices)} inputs remaining)")
+                await asyncio.sleep(0.8)
+            except Exception as e:
+                print(f"    ⚠️  Index {idx} failed (hidden element?), trying next...")
+                # Try next index
+                if not available_indices:
+                    # Generate next sequential index
+                    available_indices.append(idx + 1)
+        
+        if not filled_this:
+            print(f"    ❌ Could not fill this field after {attempts} attempts")
     
     # Fill radio buttons
     for qm in radio_questions:
@@ -369,14 +385,14 @@ async def fill_google_form():
         
         await asyncio.sleep(0.8)
     
-    # Fill dropdowns - THE BREAKTHROUGH SOLUTION + FALLBACK
+    # Fill dropdowns - THE BREAKTHROUGH SOLUTION + RESILIENT TO HIDDEN ELEMENTS
     for qm in dropdown_questions:
         question = qm["question"]
         answer = qm["answer"]
         
         print(f"\n  [{filled_count+1}] DROPDOWN: \"{question[:50]}...\"")
         print(f"    Answer: {answer}")
-        print(f"    🎯 Using breakthrough method: hidden input field")
+        print(f"    🎯 Breakthrough method: hidden input field (skip hidden elements)")
         
         # Get fresh elements to see current state
         elem_result = await handle_tool_call("get_interactive_elements", {
@@ -385,55 +401,43 @@ async def fill_google_form():
         })
         elements_text = elem_result[0].get("text", "") if elem_result else ""
         
-        # Re-scan for all text inputs (in case form structure changed)
+        # Re-scan for ALL text inputs
         all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
         current_available = [int(x) for x in all_text_inputs if int(x) not in used_indices]
         
-        print(f"    📍 Current available indices: {current_available}")
+        print(f"    📍 Available unused indices: {current_available}")
         
-        if current_available:
-            dropdown_input_idx = current_available[0]
-            used_indices.append(dropdown_input_idx)
-            print(f"    📍 Using hidden input at index {dropdown_input_idx}")
+        # Try multiple indices until one works (skip hidden elements)
+        filled_this = False
+        attempts = 0
+        
+        while not filled_this and attempts < 10:
+            if current_available:
+                dropdown_input_idx = current_available.pop(0)
+            else:
+                # Generate next sequential index
+                last_idx = used_indices[-1] if used_indices else 0
+                dropdown_input_idx = last_idx + 1
             
-            # Type directly into the hidden input field - this is the key!
-            print(f"    ⌨️  Typing '{answer}' into hidden input...")
-            await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": answer})
-            filled_count += 1
-            print(f"    ✅ Dropdown filled!")
-            await asyncio.sleep(1)
-        else:
-            print(f"    ❌ ERROR: No available input index for dropdown!")
-            print(f"    ⚠️  This may be the 250 marks surprise element!")
-            print(f"    🔄 Attempting alternative: Click dropdown UI...")
+            attempts += 1
             
-            # Try to find and click listbox
-            listbox_match = re.search(r'\[(\d+)\]<div[^>]*role=["\']listbox', elements_text, re.IGNORECASE)
-            if listbox_match:
-                listbox_idx = int(listbox_match.group(1))
-                print(f"    📍 Found listbox at index {listbox_idx}, clicking...")
-                try:
-                    await handle_tool_call("click_element_by_index", {"index": listbox_idx})
-                    await asyncio.sleep(1)
-                    
-                    # Look for the option with our answer
-                    elem_result = await handle_tool_call("get_interactive_elements", {
-                        "viewport_mode": "all",
-                        "structured_output": False
-                    })
-                    elements_text = elem_result[0].get("text", "") if elem_result else ""
-                    
-                    option_match = re.search(rf'\[(\d+)\][^[]*{re.escape(answer)}', elements_text, re.IGNORECASE)
-                    if option_match:
-                        option_idx = int(option_match.group(1))
-                        print(f"    📍 Found option '{answer}' at index {option_idx}, clicking...")
-                        await handle_tool_call("click_element_by_index", {"index": option_idx})
-                        filled_count += 1
-                        print(f"    ✅ Dropdown selected via click method!")
-                        await asyncio.sleep(1)
-                except Exception as e:
-                    print(f"    ❌ Alternative method failed: {e}")
-                    print(f"    ⚠️  CRITICAL: Dropdown not filled - form may not submit!")
+            try:
+                print(f"    📝 Attempt {attempts}: Trying index {dropdown_input_idx}...")
+                await handle_tool_call("input_text", {"index": dropdown_input_idx, "text": answer})
+                used_indices.append(dropdown_input_idx)
+                filled_count += 1
+                filled_this = True
+                print(f"    ✅ Dropdown filled at index {dropdown_input_idx}!")
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"    ⚠️  Index {dropdown_input_idx} failed (hidden?), trying next...")
+                # Add next sequential index if we run out
+                if not current_available:
+                    current_available.append(dropdown_input_idx + 1)
+        
+        if not filled_this:
+            print(f"    ❌ CRITICAL: Could not fill dropdown after {attempts} attempts!")
+            print(f"    ⚠️  This is the 250 marks surprise element!")
     
     # Summary
     print(f"\n{'='*60}")
