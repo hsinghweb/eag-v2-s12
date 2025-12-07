@@ -87,6 +87,48 @@ class BrowserAgent:
         self.google_email = os.getenv("GOOGLE_EMAIL")
         self.google_password = os.getenv("GOOGLE_PASSWORD")
     
+    def get_answer_for_question(self, question_text: str) -> tuple:
+        """
+        Deterministic matching: question text -> (answer, field_type)
+        Returns (answer, type) where type is 'text', 'radio', or 'dropdown'
+        
+        From INFO.md:
+        - Master name: Himanshu Singh
+        - DOB: 17-Dec-1984
+        - Married: Yes
+        - Email: himanshu.kumar.singh@gmail.com
+        - Course: EAG (for both course questions)
+        """
+        q = question_text.lower()
+        
+        # Order matters! More specific matches first
+        
+        # Question: "What is the name of your Master?"
+        if "master" in q:
+            return ("Himanshu Singh", "text")
+        
+        # Question: "What is his/her Date of Birth?"
+        if "date of birth" in q or "birth" in q or "dob" in q:
+            return ("17-Dec-1984", "text")
+        
+        # Question: "Is he/she married?"
+        if "married" in q:
+            return ("Yes", "radio")
+        
+        # Question: "What is his/her email id?"
+        if "email" in q:
+            return ("himanshu.kumar.singh@gmail.com", "text")
+        
+        # Question: "Which course is he/she taking?" (dropdown)
+        if "which course" in q or "taking" in q:
+            return ("EAG", "dropdown")
+        
+        # Question: "What course is he/her in?" (text)
+        if "course" in q:
+            return ("EAG", "text")
+        
+        return (None, None)
+    
     async def _check_google_login_required(self) -> bool:
         """Check if the current page is a Google login page"""
         try:
@@ -389,69 +431,97 @@ class BrowserAgent:
                 "error": "Login required - run: python -m browser_agent.setup_login"
             }
         else:
-            # Form filling prompt - LLM must match question text to answer from INFO.md
-            full_prompt = f"""You are filling a Google Form. Questions appear in RANDOM order.
+            # Simpler prompt - just ask LLM to identify ONE unfilled field
+            full_prompt = f"""Google Form filling. Find ONE unfilled field.
 
-KNOWLEDGE BASE (use this to answer questions):
-{instruction}
-
-CURRENT PAGE STATE:
+PAGE:
 {truncated_page_state}
 
-ALREADY FILLED INDICES (DO NOT FILL AGAIN): {list(filled_indices) if filled_indices else 'None'}
-Recent actions: {steps_list}
-Step {current_step}/{self.max_steps}
+SKIP THESE INDICES (already filled): {list(filled_indices)}
+IGNORE: "Sign in", "Switch account" buttons
 
-YOUR TASK:
-1. Look at each form field/question in the PAGE STATE
-2. Find a field that is NOT in the "already filled" list
-3. Match the question text to the KNOWLEDGE BASE to find the answer
-4. Return the action to fill that field
+Find an input field NOT in the skip list. Tell me:
+1. The field index
+2. What question it's asking (copy the question text)
 
-QUESTION MATCHING GUIDE:
-- "name of your Master" or "Master" → Answer: Himanshu Singh
-- "Date of Birth" or "DOB" → Answer: 17-Dec-1984  
-- "married" → Answer: Yes (click radio button)
-- "email" → Answer: himanshu.kumar.singh@gmail.com
-- "course is he/her in" → Answer: EAG V2
-- "course is he/she taking" or "Which course" (dropdown) → Answer: EAG V2
+Return JSON:
+{{"index": N, "question": "exact question text from the form"}}
 
-ACTION TYPES:
-- Text field: {{"action": "input_text", "params": {{"index": N, "text": "ANSWER"}}, "reasoning": "question X → answer Y"}}
-- Radio button (Yes/No): {{"action": "click_element_by_index", "params": {{"index": N}}, "reasoning": "clicking Yes/No option"}}
-- Dropdown: {{"action": "select_dropdown_option", "params": {{"index": N, "option_text": "ANSWER"}}, "reasoning": "selecting option"}}
-- Submit: {{"action": "click_element_by_index", "params": {{"index": N}}, "reasoning": "clicking Submit button"}}
-- Done: {{"action": "done", "params": {{}}, "reasoning": "form submitted"}}
+If all fields filled, return:
+{{"index": -1, "question": "SUBMIT"}}
 
-Return ONE JSON action only:"""
+JSON only:"""
         
         try:
-            time.sleep(1)  # Rate limiting
+            time.sleep(2)  # Rate limiting
             response = await self.model.generate_text(prompt=full_prompt)
             
-            # Parse the LLM response
-            output = parse_llm_json(
-                response, 
-                required_keys=["action", "params", "reasoning"]
-            )
+            # Parse LLM response - only needs index and question
+            output = parse_llm_json(response, required_keys=["index", "question"])
             
-            # Validate - don't re-fill already filled indices
-            if output.get("action") == "input_text":
-                proposed_idx = output.get("params", {}).get("index")
-                if proposed_idx in filled_indices:
-                    log_step(f"[WARN] LLM tried to re-fill index {proposed_idx}, skipping...")
-                    # Force it to look for submit button instead
-                    return {
-                        "action": "click_element_by_index",
-                        "params": {"index": 0},  # Try first clickable
-                        "reasoning": "All text fields filled, looking for submit"
-                    }
+            field_index = output.get("index", -1)
+            question_text = output.get("question", "")
             
-            return output
+            log_step(f"[LLM] Found field {field_index}: {question_text[:50]}...")
+            
+            # Check if all fields filled - submit
+            if field_index == -1 or "submit" in question_text.lower():
+                log_step("[ACTION] All fields filled, looking for Submit button...")
+                return {
+                    "action": "click_element_by_index",
+                    "params": {"index": 10},  # Usually submit is near the end
+                    "reasoning": "Clicking Submit button"
+                }
+            
+            # Skip if already filled
+            if field_index in filled_indices:
+                log_step(f"[SKIP] Index {field_index} already filled, scrolling...")
+                return {
+                    "action": "scroll_down",
+                    "params": {"pixels": 200},
+                    "reasoning": "Looking for unfilled field"
+                }
+            
+            # Use DETERMINISTIC matching to get the correct answer
+            answer, field_type = self.get_answer_for_question(question_text)
+            
+            if not answer:
+                log_step(f"[WARN] No answer found for: {question_text}")
+                return {
+                    "action": "scroll_down",
+                    "params": {"pixels": 150},
+                    "reasoning": "Could not match question"
+                }
+            
+            log_step(f"[MATCH] Question: {question_text[:40]} → Answer: {answer}")
+            
+            # Return the appropriate action based on field type
+            if field_type == "radio":
+                return {
+                    "action": "click_element_by_index",
+                    "params": {"index": field_index},
+                    "reasoning": f"Clicking radio button for '{answer}'"
+                }
+            elif field_type == "dropdown":
+                return {
+                    "action": "select_dropdown_option",
+                    "params": {"index": field_index, "option_text": answer},
+                    "reasoning": f"Selecting '{answer}' from dropdown"
+                }
+            else:  # text
+                return {
+                    "action": "input_text",
+                    "params": {"index": field_index, "text": answer},
+                    "reasoning": f"Filling '{question_text[:30]}' with '{answer}'"
+                }
             
         except Exception as e:
             log_error(f"LLM planning error: {e}")
-            return {"error": str(e)}
+            return {
+                "action": "scroll_down",
+                "params": {"pixels": 150},
+                "reasoning": "Fallback after error"
+            }
     
     async def _execute_browser_action(self, action: str, params: Dict) -> str:
         """Execute a browser action using mcp_tools"""

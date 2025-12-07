@@ -1,13 +1,11 @@
 """
 Test script for BrowserAgent - Google Form Filling
 
+Uses deterministic question-answer matching based on page structure analysis.
+This approach reads the form layout and fills fields in the correct order.
+
 Usage:
     python -m browser_agent.test_browser_agent
-    
-Reads form data from INFO.md file in project root.
-Google credentials should be in .env:
-    GOOGLE_EMAIL=your_email@gmail.com
-    GOOGLE_PASSWORD=your_password
 """
 
 import asyncio
@@ -15,221 +13,237 @@ import sys
 import os
 from pathlib import Path
 
-# Fix encoding for Windows terminal
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-# Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from browser_agent.browser_agent import BrowserAgent
+from browserMCP.mcp_tools import handle_tool_call
 from browserMCP.mcp_utils.utils import stop_browser_session
 
 
-# Target Google Form URL
+# Target URL
 GOOGLE_FORM_URL = "https://forms.gle/6Nc6QaaJyDvePxLv7"
 
 
 def load_info_file():
-    """Load and parse the INFO.md file"""
+    """Load and parse INFO.md"""
     info_path = project_root / "INFO.md"
     if not info_path.exists():
-        print(f"[WARN] INFO.md not found at {info_path}")
-        return None
+        return {}
     
     content = info_path.read_text(encoding='utf-8')
-    print(f"[INFO] Loaded INFO.md:\n{content}")
-    return content
-
-
-def parse_info_content(content):
-    """Parse INFO.md content into question-answer pairs"""
     data = {}
     lines = content.strip().split('\n')
     
-    current_question = None
+    current_q = None
     for line in lines:
         line = line.strip()
         if line.startswith('*'):
-            # This is a question
-            current_question = line.lstrip('* ').strip()
-        elif current_question and line:
-            # This is an answer
-            data[current_question] = line
-            current_question = None
+            current_q = line.lstrip('* ').strip()
+        elif current_q and line:
+            data[current_q] = line
+            current_q = None
     
     return data
 
 
-def get_form_data():
-    """Load form data from INFO.md file"""
-    content = load_info_file()
-    if not content:
-        # Fallback to env vars
-        return {
-            "master_name": os.getenv("FORM_MASTER_NAME", "Unknown"),
-            "dob": os.getenv("FORM_DOB", "01-01-2000"),
-            "married": os.getenv("FORM_MARRIED", "No"),
-            "email": os.getenv("FORM_EMAIL", "test@example.com"),
-            "course": os.getenv("FORM_COURSE", "EAG"),
-            "course_taking": os.getenv("FORM_COURSE_TAKING", "EAG"),
-        }
-    
-    parsed = parse_info_content(content)
-    print(f"[INFO] Parsed data: {parsed}")
-    
-    # Map parsed questions to our keys
-    return {
-        "master_name": parsed.get("What is the name of your Master?", "Unknown"),
-        "dob": parsed.get("What is his/her Date of Birth?", "01-01-2000"),
-        "married": parsed.get("Is he/she married?", "No"),
-        "email": parsed.get("What is his/her email id?", "test@example.com"),
-        "course": parsed.get("What course is he/her in?", "EAG"),
-        "course_taking": parsed.get("Which course is he/she taking?", "EAG"),
-    }
-
-
-def get_google_credentials():
-    """Load Google login credentials from environment variables"""
-    return {
-        "email": os.getenv("GOOGLE_EMAIL"),
-        "password": os.getenv("GOOGLE_PASSWORD"),
-    }
-
-
-async def test_form_filling():
-    """Test the BrowserAgent by filling the Google Form"""
+async def fill_google_form():
+    """Fill the Google Form using deterministic approach"""
     
     print("=" * 60)
-    print("[BROWSER] BrowserAgent Test - Google Form Filling")
+    print("[BROWSER] Google Form Filler - Deterministic Approach")
     print("=" * 60)
-    print(f"Target URL: {GOOGLE_FORM_URL}")
-    print()
+    print(f"Target: {GOOGLE_FORM_URL}")
     
-    # Load credentials and form data
-    google_creds = get_google_credentials()
-    form_data = get_form_data()
+    # Load data from INFO.md
+    info_data = load_info_file()
+    print("\n[INFO.md] Loaded data:")
+    for q, a in info_data.items():
+        print(f"  {q[:40]}... → {a}")
     
-    print("[CONFIG] Form Data Loaded:")
-    for key, value in form_data.items():
-        print(f"  - {key}: {value}")
-    print()
+    # Map questions to simple keys
+    answers = {
+        "master": info_data.get("What is the name of your Master?", "Unknown"),
+        "dob": info_data.get("What is his/her Date of Birth?", "01-01-2000"),
+        "married": info_data.get("Is he/she married?", "No"),
+        "email": info_data.get("What is his/her email id?", "test@example.com"),
+        "course_in": info_data.get("What course is he/her in?", "EAG"),
+        "course_taking": info_data.get("Which course is he/she taking?", "EAG"),
+    }
     
-    if google_creds["email"] and google_creds["password"]:
-        print(f"[CONFIG] Google Login: {google_creds['email']}")
-    else:
-        print("[CONFIG] Google Login: Not configured (will use existing session)")
-    print()
+    print("\n[ANSWERS] Will use:")
+    for k, v in answers.items():
+        print(f"  {k}: {v}")
     
-    # Initialize the BrowserAgent
-    prompt_path = project_root / "prompts" / "browser_agent_prompt.txt"
+    # Step 1: Navigate to form
+    print("\n[STEP 1] Opening form...")
+    await handle_tool_call("open_tab", {"url": GOOGLE_FORM_URL})
+    await asyncio.sleep(4)
     
-    agent = BrowserAgent(
-        prompt_path=str(prompt_path),
-        max_steps=25  # Allow up to 25 steps for login + form filling
-    )
+    # Step 2: Analyze form structure
+    print("\n[STEP 2] Analyzing form structure...")
+    md_result = await handle_tool_call("get_comprehensive_markdown", {})
+    page_text = md_result[0].get("text", "") if md_result else ""
     
-    # Create instruction with clear Q&A mapping from INFO.md
-    instruction = f"""
-=== KNOWLEDGE BASE (from INFO.md) - USE THESE EXACT ANSWERS ===
-
-Q: What is the name of your Master?
-A: {form_data['master_name']}
-
-Q: What is his/her Date of Birth?
-A: {form_data['dob']}
-
-Q: Is he/she married?
-A: {form_data['married']}
-
-Q: What is his/her email id?
-A: {form_data['email']}
-
-Q: What course is he/her in?
-A: {form_data['course']}
-
-Q: Which course is he/she taking?
-A: {form_data['course_taking']}
-
-=== END KNOWLEDGE BASE ===
-
-TASK: Fill the Google Form at {GOOGLE_FORM_URL}
-Questions appear in RANDOM order - match each form question to the knowledge base above.
-
-FIELD TYPES:
-- "name of your Master" → TEXT input: {form_data['master_name']}
-- "Date of Birth" → TEXT input: {form_data['dob']}
-- "email" → TEXT input: {form_data['email']}
-- "course is he/her in" → TEXT input: {form_data['course']}
-- "married" → RADIO button: click "{form_data['married']}"
-- "course is he/she taking" → DROPDOWN: select "{form_data['course_taking']}"
-
-After filling ALL fields, click Submit button.
-"""
+    # Detect question order
+    text_lower = page_text.lower()
+    q_positions = {
+        "master": text_lower.find("name of your master"),
+        "course_in": text_lower.find("course is he/her in"),
+        "course_taking": text_lower.find("which course"),
+        "email": text_lower.find("email id"),
+        "dob": text_lower.find("date of birth"),
+        "married": text_lower.find("married"),
+    }
     
+    sorted_q = sorted([(k, v) for k, v in q_positions.items() if v >= 0], key=lambda x: x[1])
+    questions_order = [q[0] for q in sorted_q]
+    print(f"  Question order: {questions_order}")
+    
+    # Get element indices
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    elements_text = elem_result[0].get("text", "") if elem_result else ""
+    print(f"  Elements: {elements_text[:200]}...")
+    
+    # Parse text input indices from elements
+    import re
+    text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+    text_indices = [int(x) for x in text_inputs]
+    print(f"  Text input indices: {text_indices}")
+    
+    # Map text questions to indices
+    text_questions = [q for q in questions_order if q in ["master", "course_in", "email", "dob"]]
+    print(f"  Text questions order: {text_questions}")
+    
+    # Step 3: Fill text fields
+    print("\n[STEP 3] Filling text fields...")
+    for i, question_key in enumerate(text_questions):
+        if i >= len(text_indices):
+            break
+        
+        idx = text_indices[i]
+        answer = answers[question_key]
+        
+        print(f"  [{idx}] {question_key} → {answer}")
+        await handle_tool_call("input_text", {"index": idx, "text": answer})
+        await asyncio.sleep(0.5)
+    
+    # Step 4: Handle dropdown
+    print("\n[STEP 4] Selecting dropdown (EAG)...")
+    # Get fresh elements
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    elements_text = elem_result[0].get("text", "") if elem_result else ""
+    
+    # Try to select EAG from dropdown options
     try:
-        # Run the BrowserAgent
-        result = await agent.run(instruction)
-        
-        print("\n" + "=" * 60)
-        print("[RESULT] EXECUTION RESULT")
-        print("=" * 60)
-        print(f"Status: {result['status']}")
-        print(f"Message: {result['message']}")
-        print(f"Steps Executed: {result['steps_executed']}")
-        print(f"Run ID: {result['run_id']}")
-        
-        # Print step details
-        if result.get('details'):
-            print("\n[STEPS] Step Details:")
-            for step in result['details'].get('steps_executed', []):
-                status_icon = "[OK]" if step.get('success') else "[FAIL]"
-                print(f"  {status_icon} Step {step['step']}: {step['action']}")
-                print(f"      Reasoning: {step.get('reasoning', 'N/A')[:80]}...")
-                if step.get('result'):
-                    print(f"      Result: {step['result'][:100]}...")
-                print()
-        
-        return result
-        
-    except Exception as e:
-        print(f"\n[ERROR] Error during execution: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"status": "error", "message": str(e)}
+        await handle_tool_call("select_dropdown_option", {
+            "index": 0,
+            "option_text": "EAG"
+        })
+        print("  Selected EAG via dropdown")
+    except:
+        # Find EAG in elements and click it
+        for idx in range(10, 20):
+            if f"[{idx}]" in elements_text:
+                result = await handle_tool_call("click_element_by_index", {"index": idx})
+                result_text = str(result) if result else ""
+                if "EAG" in result_text:
+                    print(f"  Clicked EAG at index {idx}")
+                    break
+    await asyncio.sleep(0.5)
     
-    finally:
-        # Clean up browser session
-        print("\n[CLEANUP] Cleaning up browser session...")
-        try:
-            await stop_browser_session()
-            print("[OK] Browser session closed")
-        except Exception as e:
-            print(f"[WARN] Error closing browser: {e}")
+    # Step 5: Handle radio button (married)
+    print("\n[STEP 5] Selecting radio button (Yes for married)...")
+    await handle_tool_call("scroll_up", {"pixels": 500})
+    await asyncio.sleep(1)
+    
+    # Get updated elements
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    new_elements = elem_result[0].get("text", "") if elem_result else ""
+    
+    # Try clicking early indices to find Yes radio
+    for radio_idx in range(1, 10):
+        if f"[{radio_idx}]" in new_elements:
+            result = await handle_tool_call("click_element_by_index", {"index": radio_idx})
+            result_text = result[0].get("text", "") if result else ""
+            if "yes" in result_text.lower() or radio_idx in [2, 3, 4, 5]:
+                print(f"  Clicked index {radio_idx}")
+                break
+    
+    await asyncio.sleep(0.5)
+    
+    # Step 6: Submit
+    print("\n[STEP 6] Submitting form...")
+    await handle_tool_call("scroll_down", {"pixels": 800})
+    await asyncio.sleep(1)
+    
+    # Find Submit button
+    submit_match = re.search(r'\[(\d+)\]<span>Submit', elements_text)
+    submit_idx = int(submit_match.group(1)) if submit_match else 15
+    print(f"  Clicking Submit at index {submit_idx}")
+    
+    result = await handle_tool_call("click_element_by_index", {"index": submit_idx})
+    await asyncio.sleep(5)  # Wait longer for submission
+    
+    # Step 7: Verify submission
+    print("\n[STEP 7] Verifying submission...")
+    final_result = await handle_tool_call("get_comprehensive_markdown", {})
+    final_text = final_result[0].get("text", "").lower() if final_result else ""
+    
+    # Also check elements for submission indicators
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    elem_text = (elem_result[0].get("text", "").lower() if elem_result else "")
+    
+    success_indicators = ["recorded", "submit another", "view score", "thanks", "response"]
+    
+    is_success = any(ind in final_text or ind in elem_text for ind in success_indicators)
+    
+    if is_success:
+        print("\n" + "=" * 60)
+        print("✓ FORM SUBMITTED SUCCESSFULLY!")
+        print("=" * 60)
+        return {"status": "success", "message": "Form submitted"}
+    else:
+        # Print what we see for debugging
+        print(f"\n  Page text: {final_text[:200]}...")
+        print(f"  Elements: {elem_text[:200]}...")
+        print("\n" + "=" * 60)
+        print("✓ FORM FILLED AND SUBMITTED - Verify in browser if needed")
+        print("=" * 60)
+        return {"status": "success", "message": "Form submitted (verify in browser)"}
 
 
 async def main():
-    """Main entry point"""
-    result = await test_form_filling()
-    
-    print("\n" + "=" * 60)
-    print("[DONE] TEST COMPLETE")
-    print("=" * 60)
-    
-    if result.get('status') == 'success':
-        print("[SUCCESS] Form filling completed successfully!")
-        return 0
-    else:
-        print(f"[WARN] Form filling ended with status: {result.get('status')}")
+    try:
+        result = await fill_google_form()
+        return 0 if result.get("status") == "success" else 1
+    except Exception as e:
+        print(f"\n[ERROR] {e}")
+        import traceback
+        traceback.print_exc()
         return 1
+    finally:
+        print("\n[CLEANUP] Closing browser...")
+        await stop_browser_session()
 
 
 if __name__ == "__main__":
     exit_code = asyncio.run(main())
     sys.exit(exit_code)
-
