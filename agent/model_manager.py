@@ -59,17 +59,10 @@ class ModelManager:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     self.model_info["url"]["generate"],
-                    json={"model": self.model_info["model"], "prompt": prompt, "stream": False},
-                    timeout=aiohttp.ClientTimeout(total=120)  # 2 minute timeout
+                    json={"model": self.model_info["model"], "prompt": prompt, "stream": False}
                 ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise RuntimeError(f"Ollama HTTP {response.status}: {error_text}")
+                    response.raise_for_status()
                     result = await response.json()
-                    if "response" not in result:
-                        raise RuntimeError(f"Ollama response missing 'response' key: {result}")
                     return result["response"].strip()
-        except aiohttp.ClientError as e:
-            raise RuntimeError(f"Ollama connection error: {type(e).__name__}: {str(e)}")
         except Exception as e:
-            raise RuntimeError(f"Ollama generation failed: {type(e).__name__}: {str(e)}")
+            raise RuntimeError(f"Ollama generation failed: {str(e)}")
