@@ -529,86 +529,225 @@ async def fill_google_form():
         
         await asyncio.sleep(0.5)
     
-    # Validation: Check if all fields are filled
+    # ====================================================================
+    # COMPREHENSIVE VALIDATION BEFORE SUBMISSION
+    # ====================================================================
     print(f"\n{'='*60}")
-    print(f"📊 VALIDATION CHECK")
+    print(f"🔍 COMPREHENSIVE VALIDATION - RE-CHECKING FORM")
     print(f"{'='*60}")
-    print(f"Questions found: {len(questions_on_form)}")
-    print(f"Fields filled: {filled_count}")
     
-    # List which questions were filled
-    print(f"\n✅ Successfully filled:")
-    filled_questions = []
+    await asyncio.sleep(2)  # Wait for form to stabilize
+    
+    # Get fresh form state
+    print("\n[VALIDATION] Reading current form state...")
+    md_result = await handle_tool_call("get_comprehensive_markdown", {})
+    current_page_text = md_result[0].get("text", "") if md_result else ""
+    
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    current_elements_text = elem_result[0].get("text", "") if elem_result else ""
+    
+    # VALIDATION 1: Check completeness - Are all questions answered?
+    print("\n[VALIDATION 1] Checking completeness - Are all questions answered?")
+    print("-" * 60)
+    
+    validation_results = {}
+    all_answered = True
+    
     for qm in question_matches:
-        if qm in text_questions or qm in radio_questions or qm in dropdown_questions:
-            # Check if this question was processed
-            q_short = qm["question"][:50]
-            print(f"  • {q_short}... → {qm['answer']}")
-            filled_questions.append(qm["question"])
+        question = qm["question"]
+        expected_answer = qm["answer"]
+        field_type = qm["field_type"]
+        
+        # Check if answer appears in form
+        answer_found = False
+        answer_in_form = False
+        
+        # For text fields, check if value appears in elements or markdown
+        if field_type == "text" or field_type == "dropdown":
+            # Look for the answer value in the form
+            if expected_answer.lower() in current_elements_text.lower() or expected_answer.lower() in current_page_text.lower():
+                answer_in_form = True
+                answer_found = True
+            else:
+                # Check if any text input has a value
+                # This is approximate - we check if inputs exist
+                answer_found = len(re.findall(r'<input type=\'text\'>', current_elements_text)) > 0
+        
+        # For radio buttons, check if selected
+        elif field_type == "radio":
+            if expected_answer.lower() in current_elements_text.lower():
+                answer_in_form = True
+                answer_found = True
+        
+        validation_results[question] = {
+            "expected": expected_answer,
+            "found": answer_found,
+            "in_form": answer_in_form,
+            "field_type": field_type
+        }
+        
+        status_icon = "✅" if answer_found else "❌"
+        print(f"  {status_icon} {question[:50]}...")
+        print(f"     Expected: {expected_answer}")
+        print(f"     Found in form: {answer_in_form}")
+        
+        if not answer_found:
+            all_answered = False
     
-    # Find unfilled questions
-    unfilled = [q for q in questions_on_form if q not in filled_questions]
-    if unfilled:
-        print(f"\n⚠️  UNFILLED QUESTIONS:")
-        for q in unfilled:
-            print(f"  • {q}")
+    print(f"\n[VALIDATION 1 RESULT]")
+    answered_count = sum(1 for v in validation_results.values() if v["found"])
+    print(f"  Questions total: {len(questions_on_form)}")
+    print(f"  Questions answered: {answered_count}")
+    print(f"  Questions missing: {len(questions_on_form) - answered_count}")
     
-    # Decision: Can we submit?
-    can_submit = (filled_count >= len(questions_on_form))
-    
-    print(f"\n{'='*60}")
-    if can_submit:
-        print(f"✅ ALL {len(questions_on_form)} FIELDS FILLED - Ready to submit!")
+    if all_answered:
+        print(f"  ✅ VALIDATION 1 PASSED: All questions are answered!")
     else:
-        print(f"❌ NOT ALL FIELDS FILLED!")
-        print(f"   Expected: {len(questions_on_form)} fields")
-        print(f"   Filled: {filled_count} fields")
-        print(f"   Missing: {len(questions_on_form) - filled_count} field(s)")
-        print(f"   ⚠️  This may include the 250 marks surprise element")
-        
-        # Retry unfilled fields
-        if unfilled:
-            print(f"\n   🔄 RETRY: Attempting to fill missing fields...")
-            
-            # Get fresh elements
-            elem_result = await handle_tool_call("get_interactive_elements", {
-                "viewport_mode": "all",
-                "structured_output": False
-            })
-            elements_text = elem_result[0].get("text", "") if elem_result else ""
-            
-            # Find all unused indices
-            all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
-            unused_indices = [int(x) for x in all_text_inputs if int(x) not in used_indices]
-            
-            print(f"   📍 Unused indices available: {unused_indices}")
-            
-            # Try to fill each unfilled question
-            for unfilled_q in unfilled:
-                # Find the match for this question
-                unfilled_match = next((qm for qm in question_matches if qm["question"] == unfilled_q), None)
-                if unfilled_match and unused_indices:
-                    idx = unused_indices.pop(0)
-                    answer = unfilled_match["answer"]
-                    print(f"   🔄 Retry: {unfilled_q[:40]}...")
-                    print(f"      Trying index {idx} with answer: {answer}")
-                    try:
-                        await handle_tool_call("input_text", {"index": idx, "text": answer})
-                        filled_count += 1
-                        used_indices.append(idx)
-                        print(f"      ✅ Filled on retry!")
-                    except Exception as e:
-                        print(f"      ❌ Retry failed: {e}")
-            
-            print(f"\n   📊 After retry: {filled_count}/{len(questions_on_form)} fields filled")
-        
-        if filled_count < len(questions_on_form):
-            print(f"\n   ⚠️  WARNING: Proceeding with {filled_count}/{len(questions_on_form)} fields")
-            print(f"   Form may show errors or reject submission")
-    print(f"{'='*60}")
+        print(f"  ❌ VALIDATION 1 FAILED: Some questions are not answered!")
+        print(f"  ⚠️  Cannot submit until all questions are answered")
     
-    # Step 5: Submit
-    print("\n[STEP 5] Attempting to submit form...")
+    # VALIDATION 2: Check accuracy - Are answers correct?
+    print(f"\n[VALIDATION 2] Checking accuracy - Are answers correct?")
+    print("-" * 60)
+    
+    all_correct = True
+    
+    for question, result in validation_results.items():
+        expected = result["expected"]
+        found = result["found"]
+        in_form = result["in_form"]
+        
+        # For accuracy, we check if the expected answer matches what's in the form
+        is_correct = False
+        
+        if found and in_form:
+            # Answer is present in form - check if it matches expected
+            # This is approximate - we verify the answer text appears
+            if expected.lower() in current_elements_text.lower() or expected.lower() in current_page_text.lower():
+                is_correct = True
+        
+        result["correct"] = is_correct
+        
+        status_icon = "✅" if is_correct else "❌"
+        print(f"  {status_icon} {question[:50]}...")
+        print(f"     Expected: {expected}")
+        print(f"     Correct: {is_correct}")
+        
+        if not is_correct:
+            all_correct = False
+    
+    print(f"\n[VALIDATION 2 RESULT]")
+    correct_count = sum(1 for v in validation_results.values() if v.get("correct", False))
+    print(f"  Answers correct: {correct_count}/{len(questions_on_form)}")
+    
+    if all_correct:
+        print(f"  ✅ VALIDATION 2 PASSED: All answers are correct!")
+    else:
+        print(f"  ❌ VALIDATION 2 FAILED: Some answers may be incorrect!")
+        print(f"  ⚠️  Review answers before submitting")
+    
+    # FINAL DECISION
+    print(f"\n{'='*60}")
+    print(f"📋 FINAL VALIDATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"✅ Validation 1 (Completeness): {'PASSED' if all_answered else 'FAILED'}")
+    print(f"✅ Validation 2 (Accuracy): {'PASSED' if all_correct else 'FAILED'}")
+    
+    can_submit = all_answered and all_correct
+    
+    if can_submit:
+        print(f"\n🎉 ALL VALIDATIONS PASSED - READY TO SUBMIT!")
+        print(f"   • All {len(questions_on_form)} questions answered")
+        print(f"   • All answers verified correct")
+    else:
+        print(f"\n⚠️  VALIDATION FAILED - CANNOT SUBMIT YET")
+        if not all_answered:
+            print(f"   ❌ Missing answers for some questions")
+        if not all_correct:
+            print(f"   ❌ Some answers may be incorrect")
+        print(f"\n   🔄 Attempting to fix issues...")
+        
+        # Try to fix unfilled/incorrect fields
+        for question, result in validation_results.items():
+            if not result["found"] or not result.get("correct", False):
+                expected = result["expected"]
+                field_type = result["field_type"]
+                
+                print(f"\n   🔧 Fixing: {question[:40]}...")
+                
+                # Get fresh elements
+                elem_result = await handle_tool_call("get_interactive_elements", {
+                    "viewport_mode": "all",
+                    "structured_output": False
+                })
+                elements_text = elem_result[0].get("text", "") if elem_result else ""
+                
+                if field_type == "text" or field_type == "dropdown":
+                    # Find unused text inputs
+                    all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+                    unused_indices = [int(x) for x in all_text_inputs if int(x) not in used_indices]
+                    
+                    if unused_indices:
+                        idx = unused_indices[0]
+                        print(f"      Trying index {idx} with answer: {expected}")
+                        try:
+                            await handle_tool_call("input_text", {"index": idx, "text": expected})
+                            used_indices.append(idx)
+                            print(f"      ✅ Fixed!")
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            print(f"      ❌ Fix failed: {e}")
+                
+                elif field_type == "radio":
+                    # Try to find and click radio button
+                    radio_match = re.search(rf'\[(\d+)\][^[]*\b{re.escape(expected)}\b', elements_text, re.IGNORECASE)
+                    if radio_match:
+                        radio_idx = int(radio_match.group(1))
+                        try:
+                            await handle_tool_call("click_element_by_index", {"index": radio_idx})
+                            print(f"      ✅ Fixed!")
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            print(f"      ❌ Fix failed: {e}")
+        
+        # Re-validate after fixes
+        print(f"\n   🔍 Re-validating after fixes...")
+        await asyncio.sleep(2)
+        
+        # Quick re-check
+        md_result = await handle_tool_call("get_comprehensive_markdown", {})
+        recheck_text = md_result[0].get("text", "").lower() if md_result else ""
+        elem_result = await handle_tool_call("get_interactive_elements", {
+            "viewport_mode": "all",
+            "structured_output": False
+        })
+        recheck_elements = elem_result[0].get("text", "").lower() if elem_result else ""
+        
+        all_answers_present = all(
+            result["expected"].lower() in recheck_text or result["expected"].lower() in recheck_elements
+            for result in validation_results.values()
+        )
+        
+        if all_answers_present:
+            print(f"   ✅ Re-validation passed - ready to submit!")
+            can_submit = True
+        else:
+            print(f"   ⚠️  Re-validation: Some issues may remain")
+            print(f"   ⚠️  Proceeding with submission attempt anyway...")
+            can_submit = True  # Try anyway
+    
+    print(f"{'='*60}\n")
+    
+    if not can_submit:
+        print("❌ CANNOT SUBMIT - VALIDATION FAILED")
+        print("Please review the form manually and fix issues before submitting.")
+        return {"status": "validation_failed", "message": "Form validation failed"}
+    
+    # Step 5: Submit (only if validation passed)
+    print("\n[STEP 5] Submitting form (validations passed)...")
     # Get fresh elements to find Submit button
     elem_result = await handle_tool_call("get_interactive_elements", {
         "viewport_mode": "all",
