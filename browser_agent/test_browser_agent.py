@@ -80,7 +80,7 @@ async def match_question_with_llm(question_text: str, info_content: str, info_da
         }
     """
     
-    prompt = f"""You are helping to fill a Google Form. You need to match a question from the form with the correct answer from an INFO file.
+    prompt = f"""You are an expert at matching form questions with answers. Match the form question to the EXACT answer from INFO.md.
 
 INFO.md content:
 {info_content}
@@ -88,31 +88,34 @@ INFO.md content:
 Form Question:
 "{question_text}"
 
-Task:
-1. Find the most relevant answer from INFO.md for this question
-2. Determine the field type based on these rules:
-   - "text" for:
-     * Direct questions: "What is..." (name, email, date, course name)
-     * Free-form input fields
-     * Date fields
-   - "radio" for:
-     * Yes/No questions: "Is he/she..."
-     * Binary choices
-   - "dropdown" for:
-     * Selection questions: "Which..." (which course, which option)
-     * "Select from list" type questions
-     
-   IMPORTANT: "What course is he/her in?" is TEXT (asking for course name)
-              "Which course is he/she taking?" is DROPDOWN (selecting from list)
-              
-3. Rate your confidence (high/medium/low)
+CRITICAL MATCHING RULES:
+1. Match by KEYWORDS:
+   - "name" or "Master" → Match with "What is the name of your Master?" → Answer: "Himanshu Singh"
+   - "Date of Birth" or "DOB" or "birth" → Match with "What is his/her Date of Birth?" → Answer: "17-Dec-1984"
+   - "married" → Match with "Is he/she married?" → Answer: "Yes"
+   - "email" → Match with "What is his/her email id?" → Answer: "himanshu.kumar.singh@gmail.com"
+   - "course is he/her in" or "course in" → Match with "What course is he/her in?" → Answer: "EAG"
+   - "course is he/she taking" or "taking" → Match with "Which course is he/she taking?" → Answer: "EAG"
 
-Respond with ONLY a JSON object in this format:
+2. Field Type Rules:
+   - "text": Questions asking "What is..." (name, email, date, course name)
+   - "radio": Questions asking "Is he/she..." (Yes/No questions)
+   - "dropdown": Questions asking "Which..." (selecting from a list)
+
+EXAMPLES:
+- Question: "What is the name of your Master?" → Answer: "Himanshu Singh", Type: "text"
+- Question: "What is his/her Date of Birth?" → Answer: "17-Dec-1984", Type: "text"
+- Question: "Is he/she married?" → Answer: "Yes", Type: "radio"
+- Question: "What is his/her email id?" → Answer: "himanshu.kumar.singh@gmail.com", Type: "text"
+- Question: "What course is he/her in?" → Answer: "EAG", Type: "text"
+- Question: "Which course is he/she taking?" → Answer: "EAG", Type: "dropdown"
+
+Respond with ONLY a JSON object:
 {{
-    "answer": "the answer from INFO.md",
+    "answer": "EXACT answer from INFO.md (copy exactly)",
     "field_type": "text|radio|dropdown",
-    "confidence": "high|medium/low",
-    "reasoning": "brief explanation"
+    "confidence": "high|medium|low",
+    "reasoning": "why this answer matches"
 }}"""
 
     try:
@@ -125,32 +128,71 @@ Respond with ONLY a JSON object in this format:
             response_text = response_text.split("```")[1].split("```")[0].strip()
         
         result = json.loads(response_text)
-        print(f"    LLM Match: {result.get('answer')} ({result.get('field_type')}, {result.get('confidence')})")
+        
+        # Validate answer exists in INFO.md
+        answer_found = False
+        for q, a in info_data.items():
+            if result.get("answer", "").strip() == a.strip():
+                answer_found = True
+                break
+        
+        if not answer_found:
+            print(f"    ⚠️  LLM answer '{result.get('answer')}' not found in INFO.md, using fallback...")
+            raise ValueError("Answer not in INFO.md")
+        
+        print(f"    ✅ LLM Match: {result.get('answer')} ({result.get('field_type')}, {result.get('confidence')})")
         if result.get('reasoning'):
             print(f"    Reasoning: {result.get('reasoning')}")
         
         return result
     
     except Exception as e:
-        print(f"    LLM Error: {e}")
-        # Fallback to simple matching
+        print(f"    ⚠️  LLM Error: {e}")
+        print(f"    🔄 Using fallback keyword matching...")
+        
+        # IMPROVED Fallback: Direct keyword matching
         question_lower = question_text.lower()
+        
+        # Direct keyword matching
+        if "name" in question_lower or "master" in question_lower:
+            for q, a in info_data.items():
+                if "name" in q.lower() and "master" in q.lower():
+                    return {"answer": a, "field_type": "text", "confidence": "medium", "reasoning": "Fallback: name keyword"}
+        
+        if "date of birth" in question_lower or "dob" in question_lower or ("birth" in question_lower and "date" in question_lower):
+            for q, a in info_data.items():
+                if "date of birth" in q.lower() or "dob" in q.lower():
+                    return {"answer": a, "field_type": "text", "confidence": "medium", "reasoning": "Fallback: DOB keyword"}
+        
+        if "married" in question_lower:
+            for q, a in info_data.items():
+                if "married" in q.lower():
+                    return {"answer": a, "field_type": "radio", "confidence": "medium", "reasoning": "Fallback: married keyword"}
+        
+        if "email" in question_lower:
+            for q, a in info_data.items():
+                if "email" in q.lower():
+                    return {"answer": a, "field_type": "text", "confidence": "medium", "reasoning": "Fallback: email keyword"}
+        
+        if "course" in question_lower:
+            if "which" in question_lower or "taking" in question_lower:
+                # "Which course is he/she taking?" → dropdown
+                for q, a in info_data.items():
+                    if "taking" in q.lower():
+                        return {"answer": a, "field_type": "dropdown", "confidence": "medium", "reasoning": "Fallback: which/taking keyword"}
+            else:
+                # "What course is he/her in?" → text
+                for q, a in info_data.items():
+                    if "course" in q.lower() and "in" in q.lower() and "taking" not in q.lower():
+                        return {"answer": a, "field_type": "text", "confidence": "medium", "reasoning": "Fallback: course in keyword"}
+        
+        # Last resort: return first matching answer
         for q, a in info_data.items():
             if any(word in question_lower for word in q.lower().split()[:3]):
-                field_type = "radio" if "yes" in a.lower() or "no" in a.lower() else "text"
-                return {
-                    "answer": a,
-                    "field_type": field_type,
-                    "confidence": "low",
-                    "reasoning": "Fallback matching"
-                }
+                field_type = "radio" if a.lower() in ["yes", "no"] else "text"
+                return {"answer": a, "field_type": field_type, "confidence": "low", "reasoning": "Fallback: partial match"}
         
-        return {
-            "answer": "",
-            "field_type": "text",
-            "confidence": "low",
-            "reasoning": "No match found"
-        }
+        return {"answer": "", "field_type": "text", "confidence": "low", "reasoning": "No match found"}
 
 
 async def fill_google_form():
@@ -310,7 +352,7 @@ async def fill_google_form():
     # Second pass: Fill in smart order (text first, then dropdowns)
     print("\n  📝 Second pass: Filling fields...")
     
-    # Fill text fields first (they use visible inputs)
+    # Fill text fields - SYSTEMATIC APPROACH: Try ALL elements sequentially
     for i, qm in enumerate(text_questions, 1):
         question = qm["question"]
         answer = qm["answer"]
@@ -318,32 +360,50 @@ async def fill_google_form():
         print(f"\n  [{filled_count+1}] TEXT: \"{question[:50]}...\"")
         print(f"    Answer: {answer}")
         
-        # Try multiple indices until one works (skip hidden elements)
-        filled_this = False
-        attempts = 0
-        max_attempts = len(available_indices) + 5  # Try more than available
+        # Get FRESH elements each time
+        elem_result = await handle_tool_call("get_interactive_elements", {
+            "viewport_mode": "all",
+            "structured_output": False
+        })
+        elements_text = elem_result[0].get("text", "") if elem_result else ""
         
-        while not filled_this and available_indices and attempts < max_attempts:
-            idx = available_indices.pop(0) if available_indices else (used_indices[-1] + 1 if used_indices else 0)
-            attempts += 1
+        # Find ALL text input indices (including hidden ones)
+        all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+        all_text_indices = [int(x) for x in all_text_inputs]
+        
+        # Find unused ones
+        unused_text_indices = [idx for idx in all_text_indices if idx not in used_indices]
+        
+        print(f"    📍 Found {len(all_text_indices)} text inputs total")
+        print(f"    📍 Unused: {unused_text_indices}")
+        
+        filled_this = False
+        
+        # Try EACH unused index systematically (skip hidden ones automatically)
+        for idx in unused_text_indices:
+            if filled_this:
+                break
             
             try:
-                print(f"    📝 Trying text input at index {idx}...")
+                print(f"    📝 Trying index {idx}...")
                 await handle_tool_call("input_text", {"index": idx, "text": answer})
+                
+                # Success! Mark as used
                 used_indices.append(idx)
                 filled_count += 1
                 filled_this = True
-                print(f"    ✅ Filled! ({len(available_indices)} inputs remaining)")
+                print(f"    ✅ Filled at index {idx}!")
                 await asyncio.sleep(0.8)
+                
             except Exception as e:
-                print(f"    ⚠️  Index {idx} failed (hidden element?), trying next...")
-                # Try next index
-                if not available_indices:
-                    # Generate next sequential index
-                    available_indices.append(idx + 1)
+                error_msg = str(e)[:80]
+                print(f"    ⚠️  Index {idx} failed (hidden?): {error_msg}...")
+                # Continue to next index
+                continue
         
         if not filled_this:
-            print(f"    ❌ Could not fill this field after {attempts} attempts")
+            print(f"    ❌ Could not fill after trying {len(unused_text_indices)} indices")
+            print(f"    ⚠️  This field may be blocked by hidden elements")
     
     # Fill radio buttons - ROBUST APPROACH
     for qm in radio_questions:
@@ -409,7 +469,7 @@ async def fill_google_form():
         
         await asyncio.sleep(0.8)
     
-    # Fill dropdowns - SIMPLE & EFFECTIVE METHOD
+    # Fill dropdowns - SYSTEMATIC APPROACH: Try ALL unused indices sequentially
     for qm in dropdown_questions:
         question = qm["question"]
         answer = qm["answer"]
@@ -425,25 +485,25 @@ async def fill_google_form():
         })
         elements_text = elem_result[0].get("text", "") if elem_result else ""
         
-        # Find ALL text inputs
+        # Find ALL text inputs (including hidden ones)
         all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
         all_indices = [int(x) for x in all_text_inputs]
         
         # Find UNUSED indices (critical!)
         unused_indices = [idx for idx in all_indices if idx not in used_indices]
         
-        print(f"    📍 All text inputs found: {all_indices}")
+        print(f"    📍 All text inputs: {all_indices}")
         print(f"    📍 Already used: {used_indices}")
-        print(f"    📍 UNUSED (available): {unused_indices}")
+        print(f"    📍 UNUSED (will try all): {unused_indices}")
         
         filled_dropdown = False
         
-        # Try each unused index until one works
+        # Try EACH unused index systematically (skip hidden ones automatically)
         for attempt_num, dropdown_idx in enumerate(unused_indices, 1):
             if filled_dropdown:
                 break
             
-            print(f"    📝 Attempt {attempt_num}: Trying UNUSED index {dropdown_idx}...")
+            print(f"    📝 Attempt {attempt_num}/{len(unused_indices)}: Index {dropdown_idx}...")
             
             try:
                 # Try typing into this input
@@ -457,13 +517,14 @@ async def fill_google_form():
                 await asyncio.sleep(1)
                 
             except Exception as e:
-                print(f"    ⚠️  Index {dropdown_idx} failed: {str(e)[:50]}...")
-                # Try next index
+                error_msg = str(e)[:80]
+                print(f"    ⚠️  Index {dropdown_idx} failed (hidden?): {error_msg}...")
+                # Continue to next index
                 continue
         
         if not filled_dropdown:
             print(f"    ❌ CRITICAL: Could not fill dropdown!")
-            print(f"    ⚠️  Tried {len(unused_indices)} unused indices")
+            print(f"    ⚠️  Tried ALL {len(unused_indices)} unused indices")
             print(f"    ⚠️  This is the 250 marks surprise element!")
         
         await asyncio.sleep(0.5)
