@@ -1092,11 +1092,20 @@ async def submit_form() -> bool:
         return False
 
 
-async def fill_google_form():
-    """Main function to fill Google Form with comprehensive validation"""
+async def fill_google_form(use_memory: bool = False):
+    """
+    Main function to fill Google Form with comprehensive validation
+    
+    Args:
+        use_memory: If False, bypasses memory search to ensure fresh execution
+    """
     
     log_section("GOOGLE FORM FILLER WITH VALIDATION")
     log_step(f"Target URL: {GOOGLE_FORM_URL}", symbol="🌐")
+    
+    if not use_memory:
+        log_step("🔄 Memory bypassed - executing fresh (no old memory interference)", symbol="🔄")
+    
     log_step("", symbol="")
     log_step("👀 IMPORTANT: Watch the browser window - all actions will be visible!", symbol="👀")
     log_step("   The browser will open and you'll see:", symbol="  ", indent=1)
@@ -1200,8 +1209,20 @@ async def fill_google_form():
 
 
 async def main():
+    import sys
+    
+    # Check if --fresh flag is passed to bypass memory
+    use_memory = "--use-memory" in sys.argv
+    fresh_mode = "--fresh" in sys.argv or not use_memory
+    
+    if fresh_mode:
+        log_section("FRESH MODE ENABLED")
+        log_step("🔄 Running in FRESH mode - memory will be bypassed", symbol="🔄")
+        log_step("   This ensures the task runs without old memory interference", symbol="  ", indent=1)
+        log_step("", symbol="")
+    
     try:
-        result = await fill_google_form()
+        result = await fill_google_form(use_memory=use_memory)
         
         if result.get("status") == "success":
             log_section("COMPLETION - BROWSER STAYS OPEN")
