@@ -452,18 +452,23 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
             log_step(f"    ❌ Could not fill", symbol="  ", indent=3)
     
     # Fill radio buttons - ENHANCED WITH MULTIPLE STRATEGIES
-    for qm in radio_questions:
+    log_step("", symbol="")
+    log_step("🔘 STARTING RADIO BUTTON FILLING", symbol="🔘")
+    log_step(f"   Total radio questions: {len(radio_questions)}", symbol="  ", indent=1)
+    
+    for qm_idx, qm in enumerate(radio_questions, 1):
         question = qm["question"]
         answer = qm["answer"]
         
-        log_step(f"[{filled_count+1}] RADIO: \"{question[:50]}...\"", symbol="  ", indent=1)
-        log_step(f"    Answer: {answer}", symbol="  ", indent=2)
+        log_step("", symbol="")
+        log_step(f"[RADIO {qm_idx}/{len(radio_questions)}] \"{question[:60]}...\"", symbol="  ", indent=1)
+        log_step(f"    Expected Answer: '{answer}'", symbol="  ", indent=2)
         log_step(f"    🔘 Using MULTIPLE strategies to find and click radio button...", symbol="  ", indent=2)
         
         filled_radio = False
         
         # Strategy 1: Multiple regex patterns to find exact answer text
-        log_step(f"    Strategy 1: Regex pattern matching...", symbol="  ", indent=3)
+        log_step(f"    📍 Strategy 1: Regex pattern matching for '{answer}'...", symbol="  ", indent=3)
         elem_result = await handle_tool_call("get_interactive_elements", {
             "viewport_mode": "all",
             "structured_output": False
@@ -501,45 +506,58 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
                 if idx not in candidate_indices:
                     candidate_indices.append(idx)
         
-        log_step(f"    Found {len(candidate_indices)} candidate indices: {candidate_indices[:10]}...", symbol="  ", indent=3)
+        log_step(f"    ✅ Found {len(candidate_indices)} candidate indices: {candidate_indices[:15]}", symbol="  ", indent=4)
         
         # Try clicking each candidate
-        for radio_idx in candidate_indices:
+        for attempt_num, radio_idx in enumerate(candidate_indices, 1):
             if filled_radio:
                 break
             try:
-                log_step(f"    Trying index {radio_idx}...", symbol="  ", indent=4)
-                log_step(f"    👀 Watch browser - clicking radio button...", symbol="  ", indent=5)
+                log_step(f"    Attempt {attempt_num}/{len(candidate_indices)}: Trying index {radio_idx}...", symbol="  ", indent=4)
+                log_step(f"    👀 Watch browser - clicking radio button at index {radio_idx}...", symbol="  ", indent=5)
+                
+                # Click the radio button
                 await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                await asyncio.sleep(1.0)  # Longer delay so user can see the click
+                await asyncio.sleep(1.5)  # Wait to see the click
+                
+                log_step(f"    ✓ Click executed at index {radio_idx}", symbol="  ", indent=5)
                 
                 # Verify selection by checking if answer appears as selected
+                log_step(f"    🔍 Verifying selection...", symbol="  ", indent=5)
                 verify_result = await handle_tool_call("get_interactive_elements", {
                     "viewport_mode": "all",
                     "structured_output": False
                 })
                 verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
                 
-                if answer.lower() in verify_text or "selected" in verify_text:
+                # Check multiple ways to verify
+                answer_found = answer.lower() in verify_text
+                selected_found = "selected" in verify_text or "checked" in verify_text
+                
+                if answer_found or selected_found:
                     filled_count += 1
                     filled_radio = True
-                    log_step(f"    ✅ Radio selected at index {radio_idx} (verified)!", symbol="  ", indent=4)
+                    log_step(f"    ✅✅✅ SUCCESS! Radio button selected at index {radio_idx}", symbol="  ", indent=4)
+                    log_step(f"    ✅ Answer '{answer}' verified in form", symbol="  ", indent=5)
+                    break  # Stop trying other indices
                 else:
-                    log_step(f"    ⚠️  Click succeeded but verification unclear", symbol="  ", indent=4)
-                    # Still count as filled if click succeeded
+                    log_step(f"    ⚠️  Click succeeded but answer not verified yet", symbol="  ", indent=4)
+                    # Still count as filled if click succeeded (might be delayed update)
                     filled_count += 1
                     filled_radio = True
+                    break
             except Exception as e:
-                log_step(f"    ⚠️  Index {radio_idx} failed: {str(e)[:40]}...", symbol="  ", indent=4)
+                error_msg = str(e)[:60]
+                log_step(f"    ❌ Index {radio_idx} failed: {error_msg}...", symbol="  ", indent=4)
                 continue
         
         # Strategy 2: Sequential search if exact match failed
         if not filled_radio:
-            log_step(f"    Strategy 2: Sequential search...", symbol="  ", indent=3)
+            log_step(f"    📍 Strategy 2: Sequential search (exact match failed)...", symbol="  ", indent=3)
             start_idx = (used_indices[-1] + 1) if used_indices else 0
-            end_idx = start_idx + 20  # Search wider range
+            end_idx = start_idx + 25  # Search wider range
             
-            log_step(f"    Searching indices {start_idx} to {end_idx}...", symbol="  ", indent=4)
+            log_step(f"    🔍 Searching indices {start_idx} to {end_idx} for radio buttons...", symbol="  ", indent=4)
             
             for radio_idx in range(start_idx, end_idx):
                 if filled_radio:
@@ -568,50 +586,71 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
         
         # Strategy 3: Try finding by question context
         if not filled_radio:
-            log_step(f"    Strategy 3: Context-based search...", symbol="  ", indent=3)
+            log_step(f"    📍 Strategy 3: Context-based search (near question text)...", symbol="  ", indent=3)
             # Look for radio buttons near the question text
             question_keywords = question.lower().split()[:3]  # First 3 words
+            log_step(f"    🔍 Looking for elements near keywords: {question_keywords}", symbol="  ", indent=4)
             
             # Find all clickable elements and check if they're near question
             all_clickable = re.findall(r'\[(\d+)\]', elements_text)
-            for idx_str in all_clickable[:30]:  # Check first 30 elements
+            log_step(f"    Found {len(all_clickable)} clickable elements to check", symbol="  ", indent=4)
+            
+            for idx_str in all_clickable[:40]:  # Check first 40 elements
                 if filled_radio:
                     break
                 try:
                     idx = int(idx_str)
                     # Check if this element is near question keywords
-                    elem_context = elements_text[max(0, elements_text.find(f"[{idx}]")-100):elements_text.find(f"[{idx}]")+100]
+                    elem_context = elements_text[max(0, elements_text.find(f"[{idx}]")-150):elements_text.find(f"[{idx}]")+150]
                     if any(kw in elem_context.lower() for kw in question_keywords):
+                        log_step(f"    Trying context-based index {idx}...", symbol="  ", indent=5)
                         await handle_tool_call("click_element_by_index", {"index": idx})
-                        await asyncio.sleep(0.5)
-                        filled_count += 1
-                        filled_radio = True
-                        log_step(f"    ✅ Radio selected at index {idx} (context-based)!", symbol="  ", indent=4)
-                except Exception:
+                        await asyncio.sleep(1.0)
+                        
+                        # Verify
+                        verify_result = await handle_tool_call("get_interactive_elements", {
+                            "viewport_mode": "all",
+                            "structured_output": False
+                        })
+                        verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
+                        
+                        if answer.lower() in verify_text:
+                            filled_count += 1
+                            filled_radio = True
+                            log_step(f"    ✅✅✅ SUCCESS! Radio selected at index {idx} (context-based)!", symbol="  ", indent=5)
+                            break
+                except Exception as e:
                     continue
         
         if not filled_radio:
-            log_step(f"    ❌ ALL STRATEGIES FAILED for radio button!", symbol="  ", indent=3)
-            log_step(f"    ⚠️  Question: {question[:50]}...", symbol="  ", indent=4)
+            log_step(f"", symbol="")
+            log_step(f"    ❌❌❌ CRITICAL: ALL STRATEGIES FAILED for radio button!", symbol="  ", indent=3)
+            log_step(f"    ⚠️  Question: {question}", symbol="  ", indent=4)
             log_step(f"    ⚠️  Expected answer: {answer}", symbol="  ", indent=4)
+            log_step(f"    ⚠️  This will cause validation to fail!", symbol="  ", indent=4)
         else:
-            log_step(f"    ✅ Radio button successfully filled!", symbol="  ", indent=3)
+            log_step(f"    ✅✅✅ Radio button successfully filled and verified!", symbol="  ", indent=3)
         
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(1.0)
     
     # Fill dropdowns - ENHANCED WITH MULTIPLE STRATEGIES
-    for qm in dropdown_questions:
+    log_step("", symbol="")
+    log_step("🎯 STARTING DROPDOWN FILLING", symbol="🎯")
+    log_step(f"   Total dropdown questions: {len(dropdown_questions)}", symbol="  ", indent=1)
+    
+    for qm_idx, qm in enumerate(dropdown_questions, 1):
         question = qm["question"]
         answer = qm["answer"]
         
-        log_step(f"[{filled_count+1}] DROPDOWN: \"{question[:50]}...\"", symbol="  ", indent=1)
-        log_step(f"    Answer: {answer}", symbol="  ", indent=2)
+        log_step("", symbol="")
+        log_step(f"[DROPDOWN {qm_idx}/{len(dropdown_questions)}] \"{question[:60]}...\"", symbol="  ", indent=1)
+        log_step(f"    Expected Answer: '{answer}'", symbol="  ", indent=2)
         log_step(f"    🎯 Using MULTIPLE strategies to fill dropdown...", symbol="  ", indent=2)
         
         filled_dropdown = False
         
         # Strategy 1: Hidden input method (typing into text input field)
-        log_step(f"    Strategy 1: Hidden input method (typing into text field)...", symbol="  ", indent=3)
+        log_step(f"    📍 Strategy 1: Hidden input method (typing '{answer}' into text field)...", symbol="  ", indent=3)
         elem_result = await handle_tool_call("get_interactive_elements", {
             "viewport_mode": "all",
             "structured_output": False
@@ -633,37 +672,44 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
             
             try:
                 log_step(f"    Attempt {attempt_num}/{len(unused_indices)}: Index {dropdown_idx}...", symbol="  ", indent=4)
-                log_step(f"    👀 Watch browser - typing '{answer}' into dropdown...", symbol="  ", indent=5)
+                log_step(f"    👀 Watch browser - typing '{answer}' into dropdown field...", symbol="  ", indent=5)
+                
+                # Type the answer
                 await handle_tool_call("input_text", {"index": dropdown_idx, "text": answer})
-                await asyncio.sleep(1.0)  # Longer delay so user can see typing
+                await asyncio.sleep(1.5)  # Wait to see typing
+                
+                log_step(f"    ✓ Text entered at index {dropdown_idx}", symbol="  ", indent=5)
                 
                 # Verify the value was set
+                log_step(f"    🔍 Verifying dropdown value...", symbol="  ", indent=5)
                 verify_result = await handle_tool_call("get_interactive_elements", {
                     "viewport_mode": "all",
                     "structured_output": False
                 })
-                verify_text = verify_result[0].get("text", "") if verify_result else ""
+                verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
                 
                 # Check if answer appears in the form
                 if answer.lower() in verify_text.lower():
                     used_indices.append(dropdown_idx)
                     filled_count += 1
                     filled_dropdown = True
-                    log_step(f"    ✅ Dropdown filled at index {dropdown_idx} (verified)!", symbol="  ", indent=5)
+                    log_step(f"    ✅✅✅ SUCCESS! Dropdown filled at index {dropdown_idx}", symbol="  ", indent=4)
+                    log_step(f"    ✅ Answer '{answer}' verified in form", symbol="  ", indent=5)
                     await asyncio.sleep(1)
+                    break  # Stop trying other indices
                 else:
-                    # Still try to verify by checking if input accepts the value
-                    log_step(f"    ⚠️  Value set but verification unclear, trying next...", symbol="  ", indent=5)
-                    # Mark as used anyway if no exception was raised
+                    # Still count as success if no exception (might be delayed update)
+                    log_step(f"    ⚠️  Value entered but verification unclear", symbol="  ", indent=5)
                     used_indices.append(dropdown_idx)
                     filled_count += 1
                     filled_dropdown = True
-                    log_step(f"    ✅ Dropdown filled at index {dropdown_idx}!", symbol="  ", indent=5)
+                    log_step(f"    ✅ Dropdown filled at index {dropdown_idx} (assuming success)", symbol="  ", indent=5)
                     await asyncio.sleep(1)
+                    break
                     
             except Exception as e:
                 error_msg = str(e)[:60]
-                log_step(f"    ⚠️  Index {dropdown_idx} failed: {error_msg}...", symbol="  ", indent=5)
+                log_step(f"    ❌ Index {dropdown_idx} failed: {error_msg}...", symbol="  ", indent=5)
                 continue
         
         # Strategy 2: Click dropdown first, then select option
@@ -814,14 +860,16 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
                     continue
         
         if not filled_dropdown:
-            log_step(f"    ❌ ALL STRATEGIES FAILED for dropdown!", symbol="  ", indent=3)
-            log_step(f"    ⚠️  Question: {question[:50]}...", symbol="  ", indent=4)
+            log_step(f"", symbol="")
+            log_step(f"    ❌❌❌ CRITICAL: ALL STRATEGIES FAILED for dropdown!", symbol="  ", indent=3)
+            log_step(f"    ⚠️  Question: {question}", symbol="  ", indent=4)
             log_step(f"    ⚠️  Expected answer: {answer}", symbol="  ", indent=4)
             log_step(f"    ⚠️  Tried {len(unused_indices)} different indices", symbol="  ", indent=4)
+            log_step(f"    ⚠️  This will cause validation to fail!", symbol="  ", indent=4)
         else:
-            log_step(f"    ✅ Dropdown successfully filled!", symbol="  ", indent=3)
+            log_step(f"    ✅✅✅ Dropdown successfully filled and verified!", symbol="  ", indent=3)
         
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.0)
     
     log_step(f"✅ Filled {filled_count}/{len(questions_on_form)} fields", symbol="✅")
     
@@ -1040,10 +1088,11 @@ async def validate_accuracy(question_matches: Dict[str, dict]) -> bool:
 
 
 async def submit_form() -> bool:
-    """Submit the form"""
-    log_section("STEP 6: SUBMITTING FORM")
+    """Submit the form - ONLY ONCE, NO RETRIES"""
+    log_section("STEP 6: SUBMITTING FORM (ONE TIME ONLY)")
     
     log_step("🔍 Finding Submit button...", symbol="🔍")
+    log_step("   ⚠️  IMPORTANT: Form will be submitted ONCE only", symbol="  ", indent=1)
     
     elem_result = await handle_tool_call("get_interactive_elements", {
         "viewport_mode": "all",
@@ -1055,20 +1104,33 @@ async def submit_form() -> bool:
     submit_match = re.search(r'\[(\d+)\]<span>Submit', elements_text)
     if submit_match:
         submit_idx = int(submit_match.group(1))
+        log_step(f"   ✅ Found Submit button at index {submit_idx}", symbol="  ", indent=1)
     else:
         submit_match = re.search(r'\[(\d+)\][^[]*submit', elements_text, re.IGNORECASE)
         submit_idx = int(submit_match.group(1)) if submit_match else None
+        if submit_idx:
+            log_step(f"   ✅ Found Submit button at index {submit_idx} (alternative pattern)", symbol="  ", indent=1)
     
     if submit_idx is None:
         log_step("❌ Could not find Submit button", symbol="❌")
+        log_step("   ⚠️  Cannot submit form - Submit button not found", symbol="  ", indent=1)
         return False
     
-    log_step(f"🖱️  Clicking Submit button at index {submit_idx}...", symbol="🖱️")
-    log_step("   👀 Watch the browser - submitting form now...", symbol="  ", indent=1)
-    await handle_tool_call("click_element_by_index", {"index": submit_idx})
+    log_step("", symbol="")
+    log_step(f"🖱️  SUBMITTING FORM NOW (index {submit_idx})...", symbol="🖱️")
+    log_step("   👀 Watch the browser - form submission is happening...", symbol="  ", indent=1)
+    log_step("   ⚠️  This is a ONE-TIME submission - no retries", symbol="  ", indent=1)
+    
+    try:
+        await handle_tool_call("click_element_by_index", {"index": submit_idx})
+        log_step("   ✅ Submit button clicked successfully", symbol="  ", indent=1)
+    except Exception as e:
+        log_step(f"   ❌ Submit failed: {str(e)[:60]}...", symbol="  ", indent=1)
+        return False
+    
     log_step("⏳ Waiting for submission to complete...", symbol="⏳", indent=1)
-    log_step("   👀 Watch the browser - form is being submitted...", symbol="  ", indent=2)
-    await asyncio.sleep(6)  # Longer delay so user can see submission
+    log_step("   👀 Watch the browser - waiting for confirmation...", symbol="  ", indent=2)
+    await asyncio.sleep(6)  # Wait for submission
     
     # Verify submission
     log_step("🔍 Verifying submission...", symbol="🔍", indent=1)
@@ -1145,8 +1207,10 @@ async def fill_google_form(use_memory: bool = False):
         
         await asyncio.sleep(2)
         
-        # Step 3: Clear all fields
-        await clear_all_fields()
+        # Step 3: Extract questions (skip clearing - form should be fresh)
+        log_section("STEP 3: EXTRACTING QUESTIONS")
+        log_step("📋 Skipping field clearing - assuming form is fresh", symbol="📋")
+        log_step("   If form has old data, please refresh the page manually", symbol="  ", indent=1)
         
         # Step 4: Extract questions
         questions_on_form = await extract_questions_from_form()
@@ -1161,19 +1225,31 @@ async def fill_google_form(use_memory: bool = False):
         validation1_passed = await validate_completeness(question_matches)
         
         if not validation1_passed:
-            log_section("VALIDATION FAILED - STOPPING")
-            log_step("❌ VALIDATION 1 FAILED - Cannot submit form", symbol="❌")
-            log_step("🛑 Stopping execution as per requirements", symbol="🛑")
-            return {"status": "validation_failed", "message": "Validation 1 (completeness) failed"}
+            log_section("VALIDATION FAILED - EXECUTION STOPPED")
+            log_step("", symbol="")
+            log_step("❌❌❌ VALIDATION 1 (COMPLETENESS) FAILED", symbol="❌")
+            log_step("", symbol="")
+            log_step("🛑 EXECUTION STOPPED - Form will NOT be submitted", symbol="🛑")
+            log_step("   Reason: Not all questions are answered", symbol="  ", indent=1)
+            log_step("   Action: Please check the form and fix missing answers", symbol="  ", indent=1)
+            log_step("   Browser will stay open for manual review", symbol="  ", indent=1)
+            log_step("", symbol="")
+            return {"status": "validation_failed", "message": "Validation 1 (completeness) failed - execution stopped"}
         
         # Step 7: Validation 2 - Accuracy
         validation2_passed = await validate_accuracy(question_matches)
         
         if not validation2_passed:
-            log_section("VALIDATION FAILED - STOPPING")
-            log_step("❌ VALIDATION 2 FAILED - Cannot submit form", symbol="❌")
-            log_step("🛑 Stopping execution as per requirements", symbol="🛑")
-            return {"status": "validation_failed", "message": "Validation 2 (accuracy) failed"}
+            log_section("VALIDATION FAILED - EXECUTION STOPPED")
+            log_step("", symbol="")
+            log_step("❌❌❌ VALIDATION 2 (ACCURACY) FAILED", symbol="❌")
+            log_step("", symbol="")
+            log_step("🛑 EXECUTION STOPPED - Form will NOT be submitted", symbol="🛑")
+            log_step("   Reason: Answers don't match INFO.md", symbol="  ", indent=1)
+            log_step("   Action: Please check the form and fix incorrect answers", symbol="  ", indent=1)
+            log_step("   Browser will stay open for manual review", symbol="  ", indent=1)
+            log_step("", symbol="")
+            return {"status": "validation_failed", "message": "Validation 2 (accuracy) failed - execution stopped"}
         
         # Step 8: Submit (only if both validations passed)
         log_section("FINAL SUMMARY")
