@@ -49,7 +49,7 @@ GOOGLE_LOGIN_PATTERNS = [
 def log_step(message: str, symbol: str = "→", indent: int = 0):
     """Log a step with consistent formatting"""
     indent_str = "  " * indent
-    print(f"{indent_str}{symbol} {message}")
+    print(f"{indent_str}{symbol} {message}", flush=True)  # flush=True for real-time output
 
 
 def log_section(title: str, width: int = 70):
@@ -438,12 +438,13 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
             if filled_this:
                 break
             try:
+                log_step(f"    👀 Watch browser - typing '{answer}'...", symbol="  ", indent=3)
                 await handle_tool_call("input_text", {"index": idx, "text": answer})
                 used_indices.append(idx)
                 filled_count += 1
                 filled_this = True
                 log_step(f"    ✅ Filled at index {idx}!", symbol="  ", indent=3)
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(1.5)  # Longer delay so user can see typing
             except Exception as e:
                 continue
         
@@ -508,8 +509,9 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
                 break
             try:
                 log_step(f"    Trying index {radio_idx}...", symbol="  ", indent=4)
+                log_step(f"    👀 Watch browser - clicking radio button...", symbol="  ", indent=5)
                 await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)  # Longer delay so user can see the click
                 
                 # Verify selection by checking if answer appears as selected
                 verify_result = await handle_tool_call("get_interactive_elements", {
@@ -631,8 +633,9 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
             
             try:
                 log_step(f"    Attempt {attempt_num}/{len(unused_indices)}: Index {dropdown_idx}...", symbol="  ", indent=4)
+                log_step(f"    👀 Watch browser - typing '{answer}' into dropdown...", symbol="  ", indent=5)
                 await handle_tool_call("input_text", {"index": dropdown_idx, "text": answer})
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)  # Longer delay so user can see typing
                 
                 # Verify the value was set
                 verify_result = await handle_tool_call("get_interactive_elements", {
@@ -1061,9 +1064,11 @@ async def submit_form() -> bool:
         return False
     
     log_step(f"🖱️  Clicking Submit button at index {submit_idx}...", symbol="🖱️")
+    log_step("   👀 Watch the browser - submitting form now...", symbol="  ", indent=1)
     await handle_tool_call("click_element_by_index", {"index": submit_idx})
-    log_step("⏳ Waiting for submission...", symbol="⏳", indent=1)
-    await asyncio.sleep(5)
+    log_step("⏳ Waiting for submission to complete...", symbol="⏳", indent=1)
+    log_step("   👀 Watch the browser - form is being submitted...", symbol="  ", indent=2)
+    await asyncio.sleep(6)  # Longer delay so user can see submission
     
     # Verify submission
     log_step("🔍 Verifying submission...", symbol="🔍", indent=1)
@@ -1092,6 +1097,14 @@ async def fill_google_form():
     
     log_section("GOOGLE FORM FILLER WITH VALIDATION")
     log_step(f"Target URL: {GOOGLE_FORM_URL}", symbol="🌐")
+    log_step("", symbol="")
+    log_step("👀 IMPORTANT: Watch the browser window - all actions will be visible!", symbol="👀")
+    log_step("   The browser will open and you'll see:", symbol="  ", indent=1)
+    log_step("   1. Form opening", symbol="  ", indent=2)
+    log_step("   2. Fields being filled one by one", symbol="  ", indent=2)
+    log_step("   3. Form submission", symbol="  ", indent=2)
+    log_step("   4. Submission confirmation", symbol="  ", indent=2)
+    log_step("", symbol="")
     
     # Initialize Model Manager (should use Groq based on profiles.yaml)
     model_manager = ModelManager()
@@ -1110,8 +1123,11 @@ async def fill_google_form():
         # Step 2: Navigate to form
         log_section("STEP 2: OPENING FORM")
         log_step(f"🌐 Navigating to: {GOOGLE_FORM_URL}", symbol="🌐")
+        log_step("   👀 Watch the browser window - form will open now...", symbol="  ", indent=1)
         await handle_tool_call("open_tab", {"url": GOOGLE_FORM_URL})
-        await asyncio.sleep(3)
+        log_step("   ⏳ Waiting for form to load...", symbol="  ", indent=1)
+        await asyncio.sleep(4)  # Longer delay so user can see form opening
+        log_step("   ✅ Form opened! Check your browser window.", symbol="  ", indent=1)
         
         # Step 2.5: Handle login
         login_success = await handle_google_login()
@@ -1159,8 +1175,17 @@ async def fill_google_form():
         submit_success = await submit_form()
         
         if submit_success:
-            log_section("SUCCESS")
+            log_section("SUCCESS - FORM SUBMITTED!")
             log_step("🎉🎉🎉 FORM SUBMITTED SUCCESSFULLY! 🎉🎉🎉", symbol="🎉")
+            log_step("", symbol="")
+            log_step("✅ All steps completed:", symbol="✅")
+            log_step("   ✓ Form opened", symbol="  ", indent=1)
+            log_step("   ✓ All fields filled", symbol="  ", indent=1)
+            log_step("   ✓ Validation 1 (Completeness) passed", symbol="  ", indent=1)
+            log_step("   ✓ Validation 2 (Accuracy) passed", symbol="  ", indent=1)
+            log_step("   ✓ Form submitted", symbol="  ", indent=1)
+            log_step("", symbol="")
+            log_step("👀 CHECK YOUR BROWSER WINDOW to see the submission confirmation!", symbol="👀")
             return {"status": "success", "message": "Form submitted successfully"}
         else:
             log_step("⚠️  Submission may have failed - check browser", symbol="⚠️")
@@ -1179,14 +1204,26 @@ async def main():
         result = await fill_google_form()
         
         if result.get("status") == "success":
-            log_section("COMPLETION")
-            log_step("🌐 Browser will stay open for verification...", symbol="🌐")
-            log_step("💡 Press Ctrl+C when done reviewing", symbol="💡")
+            log_section("COMPLETION - BROWSER STAYS OPEN")
+            log_step("🎉 Form submission completed!", symbol="🎉")
+            log_step("", symbol="")
+            log_step("👀 CHECK YOUR BROWSER WINDOW:", symbol="👀")
+            log_step("   • You should see the submission confirmation page", symbol="  ", indent=1)
+            log_step("   • The form has been successfully submitted", symbol="  ", indent=1)
+            log_step("   • All fields were filled correctly", symbol="  ", indent=1)
+            log_step("", symbol="")
+            log_step("🌐 Browser will stay open for 10 minutes for you to review...", symbol="🌐")
+            log_step("💡 Press Ctrl+C when done reviewing to close the browser", symbol="💡")
+            log_step("", symbol="")
             
             try:
-                await asyncio.sleep(300)  # Wait 5 minutes
+                # Countdown timer so user knows how long browser stays open
+                for minute in range(10, 0, -1):
+                    await asyncio.sleep(60)  # Wait 1 minute
+                    log_step(f"⏰ Browser will stay open for {minute-1} more minutes... (Press Ctrl+C to close now)", symbol="⏰")
             except KeyboardInterrupt:
-                log_step("👋 Closing browser...", symbol="👋")
+                log_step("", symbol="")
+                log_step("👋 Closing browser as requested...", symbol="👋")
         
         return 0 if result.get("status") == "success" else 1
         
