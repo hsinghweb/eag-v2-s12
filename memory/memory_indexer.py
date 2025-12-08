@@ -2,13 +2,29 @@ import os
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 from rapidfuzz.utils import default_process  # Add this at the top if needed
 import re
 import spacy
-nlp = spacy.load("en_core_web_sm")
+
+# Lazy loading of spaCy model
+_nlp: Optional[spacy.Language] = None
+
+def get_nlp() -> spacy.Language:
+    """Lazy load spaCy model with error handling."""
+    global _nlp
+    if _nlp is None:
+        try:
+            _nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            raise OSError(
+                "spaCy model 'en_core_web_sm' not found. "
+                "Please install it by running: python -m spacy download en_core_web_sm"
+            )
+    return _nlp
 
 def extract_named_entities(text: str) -> List[str]:
+    nlp = get_nlp()
     doc = nlp(text)
     return [ent.text.lower() for ent in doc.ents if ent.label_ in {"GPE", "ORG", "PERSON"}]
 
