@@ -551,60 +551,36 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
                 log_step(f"    ❌ Index {radio_idx} failed: {error_msg}...", symbol="  ", indent=4)
                 continue
         
-        # Strategy 2: Sequential search if exact match failed
+        # Strategy 2: Try ALL radio-like elements near the question
         if not filled_radio:
-            log_step(f"    📍 Strategy 2: Sequential search (exact match failed)...", symbol="  ", indent=3)
-            start_idx = (used_indices[-1] + 1) if used_indices else 0
-            end_idx = start_idx + 25  # Search wider range
+            log_step(f"    📍 Strategy 2: Find ALL radio options near question...", symbol="  ", indent=3)
             
-            log_step(f"    🔍 Searching indices {start_idx} to {end_idx} for radio buttons...", symbol="  ", indent=4)
+            # Get fresh elements
+            elem_result = await handle_tool_call("get_interactive_elements", {
+                "viewport_mode": "all",
+                "structured_output": False
+            })
+            elements_text = elem_result[0].get("text", "") if elem_result else ""
             
-            for radio_idx in range(start_idx, end_idx):
-                if filled_radio:
-                    break
-                try:
-                    result = await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                    await asyncio.sleep(0.3)
-                    
-                    # Check if this looks like a radio button click
-                    result_text = str(result).lower() if result else ""
-                    if "radio" in result_text or "button" in result_text or len(result_text) < 50:
-                        # Verify by checking form state
-                        verify_result = await handle_tool_call("get_interactive_elements", {
-                            "viewport_mode": "all",
-                            "structured_output": False
-                        })
-                        verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                        
-                        if answer.lower() in verify_text:
-                            filled_count += 1
-                            filled_radio = True
-                            log_step(f"    ✅ Radio selected at index {radio_idx} (sequential)!", symbol="  ", indent=4)
-                            break
-                except Exception:
-                    continue
-        
-        # Strategy 3: Try finding by question context
-        if not filled_radio:
-            log_step(f"    📍 Strategy 3: Context-based search (near question text)...", symbol="  ", indent=3)
-            # Look for radio buttons near the question text
-            question_keywords = question.lower().split()[:3]  # First 3 words
-            log_step(f"    🔍 Looking for elements near keywords: {question_keywords}", symbol="  ", indent=4)
-            
-            # Find all clickable elements and check if they're near question
-            all_clickable = re.findall(r'\[(\d+)\]', elements_text)
-            log_step(f"    Found {len(all_clickable)} clickable elements to check", symbol="  ", indent=4)
-            
-            for idx_str in all_clickable[:40]:  # Check first 40 elements
-                if filled_radio:
-                    break
-                try:
-                    idx = int(idx_str)
-                    # Check if this element is near question keywords
-                    elem_context = elements_text[max(0, elements_text.find(f"[{idx}]")-150):elements_text.find(f"[{idx}]")+150]
-                    if any(kw in elem_context.lower() for kw in question_keywords):
-                        log_step(f"    Trying context-based index {idx}...", symbol="  ", indent=5)
-                        await handle_tool_call("click_element_by_index", {"index": idx})
+            # Find question position in elements text
+            question_pos = elements_text.lower().find(question.lower()[:30])
+            if question_pos > 0:
+                # Look for all clickable elements within 500 chars of question
+                search_start = max(0, question_pos - 250)
+                search_end = min(len(elements_text), question_pos + 500)
+                question_context = elements_text[search_start:search_end]
+                
+                # Find all indices in this context
+                nearby_indices = [int(m.group(1)) for m in re.finditer(r'\[(\d+)\]', question_context)]
+                log_step(f"    🔍 Found {len(nearby_indices)} elements near question", symbol="  ", indent=4)
+                
+                # Try clicking each nearby element
+                for attempt_num, radio_idx in enumerate(nearby_indices[:15], 1):  # Try first 15
+                    if filled_radio:
+                        break
+                    try:
+                        log_step(f"    Attempt {attempt_num}: Trying index {radio_idx}...", symbol="  ", indent=4)
+                        await handle_tool_call("click_element_by_index", {"index": radio_idx})
                         await asyncio.sleep(1.0)
                         
                         # Verify
@@ -617,10 +593,41 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
                         if answer.lower() in verify_text:
                             filled_count += 1
                             filled_radio = True
-                            log_step(f"    ✅✅✅ SUCCESS! Radio selected at index {idx} (context-based)!", symbol="  ", indent=5)
+                            log_step(f"    ✅✅✅ SUCCESS! Radio selected at index {radio_idx} (nearby)!", symbol="  ", indent=4)
                             break
-                except Exception as e:
+                    except Exception as e:
+                        continue
+        
+        # Strategy 3: Sequential search if still failed
+        if not filled_radio:
+            log_step(f"    📍 Strategy 3: Sequential search (last resort)...", symbol="  ", indent=3)
+            start_idx = (used_indices[-1] + 1) if used_indices else 0
+            end_idx = start_idx + 30  # Search wider range
+            
+            log_step(f"    🔍 Searching indices {start_idx} to {end_idx}...", symbol="  ", indent=4)
+            
+            for radio_idx in range(start_idx, end_idx):
+                if filled_radio:
+                    break
+                try:
+                    await handle_tool_call("click_element_by_index", {"index": radio_idx})
+                    await asyncio.sleep(0.5)
+                    
+                    # Verify
+                    verify_result = await handle_tool_call("get_interactive_elements", {
+                        "viewport_mode": "all",
+                        "structured_output": False
+                    })
+                    verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
+                    
+                    if answer.lower() in verify_text:
+                        filled_count += 1
+                        filled_radio = True
+                        log_step(f"    ✅ Radio selected at index {radio_idx} (sequential)!", symbol="  ", indent=4)
+                        break
+                except Exception:
                     continue
+        
         
         if not filled_radio:
             log_step(f"", symbol="")
@@ -712,72 +719,56 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
                 log_step(f"    ❌ Index {dropdown_idx} failed: {error_msg}...", symbol="  ", indent=5)
                 continue
         
-        # Strategy 2: Click dropdown first, then select option
+        # Strategy 2: Try ALL unused text inputs more aggressively
         if not filled_dropdown:
-            log_step(f"    Strategy 2: Click dropdown then select option...", symbol="  ", indent=3)
+            log_step(f"    📍 Strategy 2: Aggressive search - trying ALL unused text inputs...", symbol="  ", indent=3)
             
-            # Find dropdown/select elements
-            dropdown_patterns = [
-                r'\[(\d+)\]<select',
-                r'\[(\d+)\]<div[^>]*class[^>]*dropdown',
-                r'\[(\d+)\]<div[^>]*role[^>]*combobox',
-            ]
+            # Get fresh elements
+            elem_result = await handle_tool_call("get_interactive_elements", {
+                "viewport_mode": "all",
+                "structured_output": False
+            })
+            elements_text = elem_result[0].get("text", "") if elem_result else ""
             
-            dropdown_indices = []
-            for pattern in dropdown_patterns:
-                matches = re.finditer(pattern, elements_text, re.IGNORECASE)
-                for match in matches:
-                    idx = int(match.group(1))
-                    if idx not in dropdown_indices:
-                        dropdown_indices.append(idx)
-            
-            log_step(f"    Found {len(dropdown_indices)} dropdown elements: {dropdown_indices[:5]}...", symbol="  ", indent=4)
-            
-            for dropdown_idx in dropdown_indices:
-                if filled_dropdown:
-                    break
-                try:
-                    log_step(f"    Clicking dropdown at index {dropdown_idx}...", symbol="  ", indent=4)
-                    await handle_tool_call("click_element_by_index", {"index": dropdown_idx})
-                    await asyncio.sleep(1)
-                    
-                    # Now try to find and click the option
-                    elem_result2 = await handle_tool_call("get_interactive_elements", {
-                        "viewport_mode": "all",
-                        "structured_output": False
-                    })
-                    elements_text2 = elem_result2[0].get("text", "") if elem_result2 else ""
-                    
-                    # Look for the answer in the dropdown options
-                    option_patterns = [
-                        rf'\[(\d+)\]<option[^>]*>{re.escape(answer)}<',
-                        rf'\[(\d+)\]<div[^>]*>{re.escape(answer)}<',
-                        rf'\[(\d+)\][^[]*\b{re.escape(answer)}\b',
-                    ]
-                    
-                    for pattern in option_patterns:
-                        option_match = re.search(pattern, elements_text2, re.IGNORECASE)
-                        if option_match:
-                            option_idx = int(option_match.group(1))
-                            log_step(f"    Clicking option at index {option_idx}...", symbol="  ", indent=5)
-                            await handle_tool_call("click_element_by_index", {"index": option_idx})
-                            await asyncio.sleep(0.5)
-                            
-                            # Verify
-                            verify_result = await handle_tool_call("get_interactive_elements", {
-                                "viewport_mode": "all",
-                                "structured_output": False
-                            })
-                            verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                            
-                            if answer.lower() in verify_text:
-                                filled_count += 1
-                                filled_dropdown = True
-                                log_step(f"    ✅ Dropdown filled via click method!", symbol="  ", indent=5)
-                                break
-                except Exception as e:
-                    log_step(f"    ⚠️  Dropdown click failed: {str(e)[:40]}...", symbol="  ", indent=4)
-                    continue
+            # Find question position
+            question_pos = elements_text.lower().find(question.lower()[:30])
+            if question_pos > 0:
+                # Find all text inputs near the question
+                search_start = max(0, question_pos - 300)
+                search_end = min(len(elements_text), question_pos + 600)
+                question_context = elements_text[search_start:search_end]
+                
+                # Find all text input indices in this context
+                nearby_text_inputs = [int(m.group(1)) for m in re.finditer(r'\[(\d+)\]<input type=\'text\'>', question_context)]
+                nearby_unused = [idx for idx in nearby_text_inputs if idx not in used_indices]
+                
+                log_step(f"    🔍 Found {len(nearby_unused)} unused text inputs near question", symbol="  ", indent=4)
+                
+                # Try each nearby input
+                for attempt_num, dropdown_idx in enumerate(nearby_unused[:10], 1):
+                    if filled_dropdown:
+                        break
+                    try:
+                        log_step(f"    Attempt {attempt_num}: Index {dropdown_idx} (near question)...", symbol="  ", indent=4)
+                        log_step(f"    👀 Watch browser - typing '{answer}'...", symbol="  ", indent=5)
+                        await handle_tool_call("input_text", {"index": dropdown_idx, "text": answer})
+                        await asyncio.sleep(1.5)
+                        
+                        # Verify
+                        verify_result = await handle_tool_call("get_interactive_elements", {
+                            "viewport_mode": "all",
+                            "structured_output": False
+                        })
+                        verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
+                        
+                        if answer.lower() in verify_text.lower():
+                            used_indices.append(dropdown_idx)
+                            filled_count += 1
+                            filled_dropdown = True
+                            log_step(f"    ✅✅✅ SUCCESS! Dropdown filled at index {dropdown_idx} (nearby)!", symbol="  ", indent=4)
+                            break
+                    except Exception:
+                        continue
         
         # Strategy 3: Try all remaining unused indices (broader search)
         if not filled_dropdown:
@@ -1087,8 +1078,38 @@ async def validate_accuracy(question_matches: Dict[str, dict]) -> bool:
     return all_correct
 
 
+async def wait_for_user_confirmation(prompt: str) -> bool:
+    """Human-in-the-loop: Wait for user to confirm before proceeding"""
+    import concurrent.futures
+    
+    log_step("", symbol="")
+    log_section("HUMAN-IN-THE-LOOP - AWAITING YOUR CONFIRMATION")
+    log_step(prompt, symbol="👤")
+    log_step("", symbol="")
+    log_step("   Type 'yes' or 'y' to continue", symbol="  ", indent=1)
+    log_step("   Type 'no' or 'n' to stop", symbol="  ", indent=1)
+    log_step("", symbol="")
+    
+    # Run input() in executor to avoid blocking async
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        try:
+            user_input = await loop.run_in_executor(executor, input, "   Your response: ")
+            user_input = user_input.strip().lower()
+            
+            if user_input in ['yes', 'y', '']:
+                log_step("   ✅ User confirmed - proceeding...", symbol="  ", indent=1)
+                return True
+            else:
+                log_step("   ❌ User declined - stopping execution", symbol="  ", indent=1)
+                return False
+        except (EOFError, KeyboardInterrupt):
+            log_step("   ❌ Input cancelled - stopping execution", symbol="  ", indent=1)
+            return False
+
+
 async def submit_form() -> bool:
-    """Submit the form - ONLY ONCE, NO RETRIES"""
+    """Submit the form - ONLY ONCE, NO RETRIES - Then wait for human confirmation"""
     log_section("STEP 6: SUBMITTING FORM (ONE TIME ONLY)")
     
     log_step("🔍 Finding Submit button...", symbol="🔍")
@@ -1117,9 +1138,9 @@ async def submit_form() -> bool:
         return False
     
     log_step("", symbol="")
-    log_step(f"🖱️  SUBMITTING FORM NOW (index {submit_idx})...", symbol="🖱️")
-    log_step("   👀 Watch the browser - form submission is happening...", symbol="  ", indent=1)
-    log_step("   ⚠️  This is a ONE-TIME submission - no retries", symbol="  ", indent=1)
+    log_step(f"🖱️  CLICKING SUBMIT BUTTON NOW (index {submit_idx})...", symbol="🖱️")
+    log_step("   👀 Watch the browser - Submit button will be clicked...", symbol="  ", indent=1)
+    log_step("   ⚠️  This is a ONE-TIME click - no retries", symbol="  ", indent=1)
     
     try:
         await handle_tool_call("click_element_by_index", {"index": submit_idx})
@@ -1128,9 +1149,25 @@ async def submit_form() -> bool:
         log_step(f"   ❌ Submit failed: {str(e)[:60]}...", symbol="  ", indent=1)
         return False
     
-    log_step("⏳ Waiting for submission to complete...", symbol="⏳", indent=1)
-    log_step("   👀 Watch the browser - waiting for confirmation...", symbol="  ", indent=2)
-    await asyncio.sleep(6)  # Wait for submission
+    log_step("⏳ Waiting 3 seconds for form to process...", symbol="⏳", indent=1)
+    await asyncio.sleep(3)  # Brief wait
+    
+    # HUMAN-IN-THE-LOOP: Wait for user to confirm submission
+    log_step("", symbol="")
+    confirmed = await wait_for_user_confirmation(
+        "👤 Please check the browser window:\n"
+        "   • Did the form submit successfully?\n"
+        "   • Do you see a confirmation message?\n"
+        "   • Are there any error messages?"
+    )
+    
+    if not confirmed:
+        log_section("EXECUTION STOPPED BY USER")
+        log_step("🛑 User declined to proceed - execution stopped", symbol="🛑")
+        return False
+    
+    log_step("⏳ Waiting for final submission confirmation...", symbol="⏳", indent=1)
+    await asyncio.sleep(3)  # Additional wait after confirmation
     
     # Verify submission
     log_step("🔍 Verifying submission...", symbol="🔍", indent=1)
