@@ -533,17 +533,25 @@ async def fill_radio_button(question: str, answer: str) -> bool:
     """
     
     try:
+        # Execute JavaScript and wait for result
         result = await page.evaluate(js_code)
         
-        if result.get("success"):
+        # Wait a bit for the click to register
+        await asyncio.sleep(1.0)
+        
+        if result and result.get("success"):
             log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' clicked!", symbol="  ", indent=4)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(0.5)
             return True
         else:
-            log_step(f"    ⚠️  JavaScript result: {result.get('error', 'Unknown error')}", symbol="  ", indent=4)
+            error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
+            log_step(f"    ⚠️  JavaScript result: {error_msg}", symbol="  ", indent=4)
             return False
     except Exception as e:
-        log_step(f"    ❌ JavaScript execution failed: {str(e)[:100]}...", symbol="  ", indent=4)
+        error_str = str(e)
+        log_step(f"    ❌ JavaScript execution failed: {error_str[:150]}...", symbol="  ", indent=4)
+        import traceback
+        log_step(f"    Full error: {traceback.format_exc()[:200]}...", symbol="  ", indent=5)
         return False
 
 
@@ -555,10 +563,10 @@ async def fill_dropdown(question: str, answer: str) -> bool:
     page = await session.get_current_page()
     
     # JavaScript to find and click dropdown option by data-value
-    js_code = f"""
-    (async function() {{
+    # Split into two steps: open dropdown, then select option
+    js_find_and_open = f"""
+    (function() {{
         const questionText = {json.dumps(question)};
-        const answerValue = {json.dumps(answer)};
         
         // Find the question heading
         const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
@@ -606,53 +614,71 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             return {{success: false, error: 'Dropdown listbox not found'}};
         }}
         
-        // First, click the dropdown to open it (click the container)
+        // Click the dropdown to open it
         if (listbox.getAttribute('aria-expanded') === 'false') {{
             listbox.click();
-            // Wait for dropdown to open
-            await new Promise(resolve => setTimeout(resolve, 1000));
         }}
         
-        // Find the option with matching data-value
-        const options = listbox.querySelectorAll('[role="option"][data-value]');
-        for (const option of options) {{
-            if (option.getAttribute('data-value') === answerValue) {{
-                // Check if it's disabled
-                if (option.getAttribute('aria-disabled') === 'true') {{
-                    return {{success: false, error: 'Option is disabled'}};
-                }}
-                
-                // Click the option
-                option.click();
-                // Wait for selection to register
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Verify it was selected
-                const isSelected = option.getAttribute('aria-selected') === 'true';
-                return {{
-                    success: isSelected,
-                    selected: isSelected,
-                    dataValue: option.getAttribute('data-value')
-                }};
-            }}
-        }}
-        
-        return {{success: false, error: 'Option with matching data-value not found'}};
+        return {{success: true, listboxFound: true}};
     }})();
     """
     
     try:
-        result = await page.evaluate(js_code)
+        # Step 1: Open dropdown
+        result1 = await page.evaluate(js_find_and_open)
+        if not result1 or not result1.get("success"):
+            error_msg = result1.get('error', 'Unknown error') if result1 else 'No result returned'
+            log_step(f"    ⚠️  Failed to find/open dropdown: {error_msg}", symbol="  ", indent=4)
+            return False
         
-        if result.get("success"):
+        # Wait for dropdown to open
+        await asyncio.sleep(1.5)
+        
+        # Step 2: Select option
+        js_select_option = f"""
+        (function() {{
+            const answerValue = {json.dumps(answer)};
+            
+            // Find all listboxes
+            const listboxes = Array.from(document.querySelectorAll('[role="listbox"]'));
+            for (const listbox of listboxes) {{
+                const options = listbox.querySelectorAll('[role="option"][data-value]');
+                for (const option of options) {{
+                    if (option.getAttribute('data-value') === answerValue) {{
+                        if (option.getAttribute('aria-disabled') === 'true') {{
+                            continue;
+                        }}
+                        
+                        option.click();
+                        return {{
+                            success: true,
+                            dataValue: option.getAttribute('data-value')
+                        }};
+                    }}
+                }}
+            }}
+            
+            return {{success: false, error: 'Option with matching data-value not found'}};
+        }})();
+        """
+        
+        result2 = await page.evaluate(js_select_option)
+        await asyncio.sleep(1.0)
+        
+        if result2 and result2.get("success"):
             log_step(f"    ✅✅✅ SUCCESS! Dropdown option '{answer}' selected!", symbol="  ", indent=4)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(0.5)
             return True
         else:
-            log_step(f"    ⚠️  JavaScript result: {result.get('error', 'Unknown error')}", symbol="  ", indent=4)
+            error_msg = result2.get('error', 'Unknown error') if result2 else 'No result returned'
+            log_step(f"    ⚠️  Failed to select option: {error_msg}", symbol="  ", indent=4)
             return False
+            
     except Exception as e:
-        log_step(f"    ❌ JavaScript execution failed: {str(e)[:100]}...", symbol="  ", indent=4)
+        error_str = str(e)
+        log_step(f"    ❌ JavaScript execution failed: {error_str[:150]}...", symbol="  ", indent=4)
+        import traceback
+        log_step(f"    Full error: {traceback.format_exc()[:200]}...", symbol="  ", indent=5)
         return False
 
 
@@ -766,20 +792,89 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
         answer_found = False
         
         if field_type == "text":
-            answer_lower = expected_answer.lower()
-            if answer_lower in current_page_text:
-                answer_found = True
-            elif "-" in expected_answer:
-                # Try date formats
-                date_formats = [
-                    expected_answer.lower(),
-                    expected_answer.replace("-", " ").lower(),
-                    expected_answer.replace("-", "/").lower(),
-                ]
-                for fmt in date_formats:
-                    if fmt in current_page_text:
-                        answer_found = True
-                        break
+            # Use JavaScript to check actual input field values
+            js_check_text = f"""
+            (function() {{
+                const questionText = {json.dumps(question)};
+                const expectedValue = {json.dumps(expected_answer)};
+                
+                // Find the question heading
+                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+                let targetHeading = null;
+                for (const heading of headings) {{
+                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                        targetHeading = heading;
+                        break;
+                    }}
+                }}
+                
+                if (!targetHeading) return {{found: false}};
+                
+                // Find text input near this heading
+                let inputField = null;
+                let currentElement = targetHeading.parentElement;
+                
+                while (currentElement && currentElement !== document.body) {{
+                    const input = currentElement.querySelector('input[type="text"]');
+                    if (input) {{
+                        inputField = input;
+                        break;
+                    }}
+                    currentElement = currentElement.parentElement;
+                }}
+                
+                if (!inputField) {{
+                    let nextSibling = targetHeading.parentElement.nextElementSibling;
+                    let searchCount = 0;
+                    while (nextSibling && searchCount < 5) {{
+                        const input = nextSibling.querySelector('input[type="text"]');
+                        if (input) {{
+                            inputField = input;
+                            break;
+                        }}
+                        nextSibling = nextSibling.nextElementSibling;
+                        searchCount++;
+                    }}
+                }}
+                
+                if (!inputField) return {{found: false}};
+                
+                const inputValue = inputField.value || '';
+                // Check exact match or partial match for dates
+                if (inputValue === expectedValue) {{
+                    return {{found: true}};
+                }}
+                
+                // For dates, try flexible matching
+                if (expectedValue.includes('-')) {{
+                    const dateParts = expectedValue.toLowerCase().split('-');
+                    const inputLower = inputValue.toLowerCase();
+                    if (dateParts.every(part => inputLower.includes(part))) {{
+                        return {{found: true}};
+                    }}
+                }}
+                
+                return {{found: false}};
+            }})();
+            """
+            try:
+                result = await page.evaluate(js_check_text)
+                answer_found = result.get("found", False) if result else False
+            except Exception:
+                # Fallback to markdown check
+                answer_lower = expected_answer.lower()
+                if answer_lower in current_page_text:
+                    answer_found = True
+                elif "-" in expected_answer:
+                    date_formats = [
+                        expected_answer.lower(),
+                        expected_answer.replace("-", " ").lower(),
+                        expected_answer.replace("-", "/").lower(),
+                    ]
+                    for fmt in date_formats:
+                        if fmt in current_page_text:
+                            answer_found = True
+                            break
         
         elif field_type == "radio":
             # Use JavaScript to check if radio is checked
@@ -825,8 +920,9 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
             """
             try:
                 result = await page.evaluate(js_check)
-                answer_found = result.get("found", False)
-            except Exception:
+                answer_found = result.get("found", False) if result else False
+            except Exception as e:
+                log_step(f"    ⚠️  Radio validation JS failed: {str(e)[:50]}...", symbol="  ", indent=3)
                 answer_found = expected_answer.lower() in current_page_text
         
         elif field_type == "dropdown":
@@ -864,17 +960,23 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
                 
                 if (!listbox) return {{found: false}};
                 
-                const option = listbox.querySelector(`[role="option"][data-value="${{answerValue}}"]`);
-                if (option && option.getAttribute('aria-selected') === 'true') {{
-                    return {{found: true}};
+                // Check all options in the listbox
+                const options = listbox.querySelectorAll('[role="option"][data-value]');
+                for (const option of options) {{
+                    if (option.getAttribute('data-value') === answerValue) {{
+                        if (option.getAttribute('aria-selected') === 'true') {{
+                            return {{found: true}};
+                        }}
+                    }}
                 }}
                 return {{found: false}};
             }})();
             """
             try:
                 result = await page.evaluate(js_check)
-                answer_found = result.get("found", False)
-            except Exception:
+                answer_found = result.get("found", False) if result else False
+            except Exception as e:
+                log_step(f"    ⚠️  Dropdown validation JS failed: {str(e)[:50]}...", symbol="  ", indent=3)
                 answer_found = expected_answer.lower() in current_page_text
         
         status_icon = "✅" if answer_found else "❌"
