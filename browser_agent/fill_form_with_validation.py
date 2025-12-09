@@ -49,7 +49,7 @@ GOOGLE_LOGIN_PATTERNS = [
 def log_step(message: str, symbol: str = "→", indent: int = 0):
     """Log a step with consistent formatting"""
     indent_str = "  " * indent
-    print(f"{indent_str}{symbol} {message}", flush=True)  # flush=True for real-time output
+    print(f"{indent_str}{symbol} {message}", flush=True)
 
 
 def log_section(title: str, width: int = 70):
@@ -112,7 +112,6 @@ async def handle_google_login() -> bool:
     
     log_step("🔐 Google login page detected", symbol="🔐")
     
-    # Check for credentials in environment
     import os
     google_email = os.getenv("GOOGLE_EMAIL")
     google_password = os.getenv("GOOGLE_PASSWORD")
@@ -123,7 +122,6 @@ async def handle_google_login() -> bool:
         try:
             await asyncio.sleep(2)
             
-            # Enter email
             log_step(f"📧 Entering email: {google_email[:10]}...", symbol="  ", indent=1)
             await handle_tool_call("input_text", {
                 "index": 0,
@@ -131,12 +129,10 @@ async def handle_google_login() -> bool:
             })
             await asyncio.sleep(1)
             
-            # Click Next button
             log_step("🖱️  Clicking Next button", symbol="  ", indent=1)
             await handle_tool_call("click_element_by_index", {"index": 1})
             await asyncio.sleep(3)
             
-            # Enter password
             log_step("🔒 Entering password", symbol="  ", indent=1)
             await handle_tool_call("input_text", {
                 "index": 0,
@@ -144,12 +140,10 @@ async def handle_google_login() -> bool:
             })
             await asyncio.sleep(1)
             
-            # Click Next button
             log_step("🖱️  Clicking Next button", symbol="  ", indent=1)
             await handle_tool_call("click_element_by_index", {"index": 1})
             await asyncio.sleep(5)
             
-            # Check if login was successful
             if not await check_google_login_required():
                 log_step("✅ Login successful!", symbol="✅")
                 return True
@@ -225,7 +219,17 @@ Respond with ONLY a JSON object:
 
     try:
         log_step(f"🤖 Using Groq LLM to match question...", symbol="  ", indent=1)
-        response_text = await model_manager.generate_text(prompt)
+        response = await model_manager.generate_text(prompt)
+        
+        # Handle response - could be string or other format
+        if isinstance(response, str):
+            response_text = response
+        elif isinstance(response, dict):
+            response_text = response.get("text", "") or str(response)
+        elif isinstance(response, list):
+            response_text = response[0].get("text", "") if response and isinstance(response[0], dict) else str(response[0]) if response else ""
+        else:
+            response_text = str(response)
         
         # Extract JSON from response (handle markdown code blocks)
         if "```json" in response_text:
@@ -233,7 +237,41 @@ Respond with ONLY a JSON object:
         elif "```" in response_text:
             response_text = response_text.split("```")[1].split("```")[0].strip()
         
-        result = json.loads(response_text)
+        # Try to parse JSON - handle cases with extra data
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            # If there's extra data, try to extract just the JSON object
+            if "Extra data" in str(e):
+                brace_start = response_text.find('{')
+                if brace_start >= 0:
+                    brace_count = 0
+                    brace_end = -1
+                    for i in range(brace_start, len(response_text)):
+                        if response_text[i] == '{':
+                            brace_count += 1
+                        elif response_text[i] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                brace_end = i + 1
+                                break
+                    
+                    if brace_end > brace_start:
+                        json_text = response_text[brace_start:brace_end]
+                        try:
+                            result = json.loads(json_text)
+                        except json.JSONDecodeError:
+                            json_text = json_text.rstrip().rstrip(',').rstrip()
+                            if json_text.endswith('}'):
+                                result = json.loads(json_text)
+                            else:
+                                raise e
+                    else:
+                        raise e
+                else:
+                    raise e
+            else:
+                raise e
         
         # Validate answer exists in INFO.md
         answer_found = False
@@ -353,7 +391,6 @@ async def extract_questions_from_form() -> List[str]:
     
     for match in heading_matches:
         q = match.strip()
-        # Remove "Required question" and clean up
         q = re.sub(r'\s*Required question\s*', '', q, flags=re.IGNORECASE).strip()
         q = re.sub(r'\s*\d+\s*point\s*', '', q, flags=re.IGNORECASE).strip()
         
@@ -363,7 +400,6 @@ async def extract_questions_from_form() -> List[str]:
     if len(questions_on_form) == 0:
         log_step("⚠️  No questions found in headings - trying alternative extraction...", symbol="⚠️", indent=1)
         
-        # Alternative: Look for question marks
         for line in page_text.split('\n'):
             line = line.strip()
             if '?' in line and len(line) > 15 and len(line) < 100:
@@ -378,6 +414,246 @@ async def extract_questions_from_form() -> List[str]:
         log_step(f"  {i}. {q[:70]}...", symbol="  ", indent=1)
     
     return questions_on_form
+
+
+async def fill_text_field(question: str, answer: str, used_indices: List[int]) -> bool:
+    """Fill a text input field"""
+    elem_result = await handle_tool_call("get_interactive_elements", {
+        "viewport_mode": "all",
+        "structured_output": False
+    })
+    elements_text = elem_result[0].get("text", "") if elem_result else ""
+    
+    all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
+    all_text_indices = [int(x) for x in all_text_inputs]
+    unused_text_indices = [idx for idx in all_text_indices if idx not in used_indices]
+    
+    for idx in unused_text_indices:
+        try:
+            log_step(f"    👀 Watch browser - typing '{answer}'...", symbol="  ", indent=3)
+            await handle_tool_call("input_text", {"index": idx, "text": answer})
+            used_indices.append(idx)
+            await asyncio.sleep(1.5)
+            return True
+        except Exception:
+            continue
+    
+    return False
+
+
+async def fill_radio_button(question: str, answer: str) -> bool:
+    """Fill a radio button using JavaScript to find by data-value"""
+    log_step(f"    🔘 Using JavaScript to find radio button with data-value='{answer}'...", symbol="  ", indent=3)
+    
+    session = await get_browser_session()
+    page = await session.get_current_page()
+    
+    # JavaScript to find and click radio button by data-value
+    js_code = f"""
+    (async function() {{
+        // Find the question heading
+        const questionText = {json.dumps(question)};
+        const answerValue = {json.dumps(answer)};
+        
+        // Find all headings (h3, h4, etc.) that contain the question text
+        const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+        let targetHeading = null;
+        
+        for (const heading of headings) {{
+            if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                targetHeading = heading;
+                break;
+            }}
+        }}
+        
+        if (!targetHeading) {{
+            return {{success: false, error: 'Question not found'}};
+        }}
+        
+        // Find the radio button container (radiogroup) near this heading
+        let radioGroup = null;
+        let currentElement = targetHeading.parentElement;
+        
+        // Search in the same question container
+        while (currentElement && currentElement !== document.body) {{
+            const group = currentElement.querySelector('[role="radiogroup"]');
+            if (group) {{
+                radioGroup = group;
+                break;
+            }}
+            currentElement = currentElement.parentElement;
+        }}
+        
+        if (!radioGroup) {{
+            // Fallback: search for radiogroup after the heading
+            let nextSibling = targetHeading.parentElement.nextElementSibling;
+            let searchCount = 0;
+            while (nextSibling && searchCount < 5) {{
+                const group = nextSibling.querySelector('[role="radiogroup"]');
+                if (group) {{
+                    radioGroup = group;
+                    break;
+                }}
+                nextSibling = nextSibling.nextElementSibling;
+                searchCount++;
+            }}
+        }}
+        
+        if (!radioGroup) {{
+            return {{success: false, error: 'Radio group not found'}};
+        }}
+        
+        // Find the radio button with matching data-value
+        const radioButtons = radioGroup.querySelectorAll('[role="radio"][data-value]');
+        for (const radio of radioButtons) {{
+            if (radio.getAttribute('data-value') === answerValue) {{
+                // Check if it's disabled
+                if (radio.getAttribute('aria-disabled') === 'true') {{
+                    return {{success: false, error: 'Radio button is disabled'}};
+                }}
+                
+                // Click the radio button
+                radio.click();
+                
+                // Wait a bit for the click to register
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Verify it was selected
+                const isChecked = radio.getAttribute('aria-checked') === 'true';
+                return {{
+                    success: isChecked,
+                    checked: isChecked,
+                    dataValue: radio.getAttribute('data-value')
+                }};
+            }}
+        }}
+        
+        return {{success: false, error: 'Radio button with matching data-value not found'}};
+    }})();
+    """
+    
+    try:
+        result = await page.evaluate(js_code)
+        
+        if result.get("success"):
+            log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' clicked!", symbol="  ", indent=4)
+            await asyncio.sleep(1.5)
+            return True
+        else:
+            log_step(f"    ⚠️  JavaScript result: {result.get('error', 'Unknown error')}", symbol="  ", indent=4)
+            return False
+    except Exception as e:
+        log_step(f"    ❌ JavaScript execution failed: {str(e)[:100]}...", symbol="  ", indent=4)
+        return False
+
+
+async def fill_dropdown(question: str, answer: str) -> bool:
+    """Fill a dropdown using JavaScript to find by data-value"""
+    log_step(f"    🎯 Using JavaScript to find dropdown option with data-value='{answer}'...", symbol="  ", indent=3)
+    
+    session = await get_browser_session()
+    page = await session.get_current_page()
+    
+    # JavaScript to find and click dropdown option by data-value
+    js_code = f"""
+    (async function() {{
+        const questionText = {json.dumps(question)};
+        const answerValue = {json.dumps(answer)};
+        
+        // Find the question heading
+        const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+        let targetHeading = null;
+        
+        for (const heading of headings) {{
+            if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                targetHeading = heading;
+                break;
+            }}
+        }}
+        
+        if (!targetHeading) {{
+            return {{success: false, error: 'Question not found'}};
+        }}
+        
+        // Find the dropdown listbox near this heading
+        let listbox = null;
+        let currentElement = targetHeading.parentElement;
+        
+        while (currentElement && currentElement !== document.body) {{
+            const box = currentElement.querySelector('[role="listbox"]');
+            if (box) {{
+                listbox = box;
+                break;
+            }}
+            currentElement = currentElement.parentElement;
+        }}
+        
+        if (!listbox) {{
+            let nextSibling = targetHeading.parentElement.nextElementSibling;
+            let searchCount = 0;
+            while (nextSibling && searchCount < 5) {{
+                const box = nextSibling.querySelector('[role="listbox"]');
+                if (box) {{
+                    listbox = box;
+                    break;
+                }}
+                nextSibling = nextSibling.nextElementSibling;
+                searchCount++;
+            }}
+        }}
+        
+        if (!listbox) {{
+            return {{success: false, error: 'Dropdown listbox not found'}};
+        }}
+        
+        // First, click the dropdown to open it (click the container)
+        if (listbox.getAttribute('aria-expanded') === 'false') {{
+            listbox.click();
+            // Wait for dropdown to open
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }}
+        
+        // Find the option with matching data-value
+        const options = listbox.querySelectorAll('[role="option"][data-value]');
+        for (const option of options) {{
+            if (option.getAttribute('data-value') === answerValue) {{
+                // Check if it's disabled
+                if (option.getAttribute('aria-disabled') === 'true') {{
+                    return {{success: false, error: 'Option is disabled'}};
+                }}
+                
+                // Click the option
+                option.click();
+                // Wait for selection to register
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Verify it was selected
+                const isSelected = option.getAttribute('aria-selected') === 'true';
+                return {{
+                    success: isSelected,
+                    selected: isSelected,
+                    dataValue: option.getAttribute('data-value')
+                }};
+            }}
+        }}
+        
+        return {{success: false, error: 'Option with matching data-value not found'}};
+    }})();
+    """
+    
+    try:
+        result = await page.evaluate(js_code)
+        
+        if result.get("success"):
+            log_step(f"    ✅✅✅ SUCCESS! Dropdown option '{answer}' selected!", symbol="  ", indent=4)
+            await asyncio.sleep(1.5)
+            return True
+        else:
+            log_step(f"    ⚠️  JavaScript result: {result.get('error', 'Unknown error')}", symbol="  ", indent=4)
+            return False
+    except Exception as e:
+        log_step(f"    ❌ JavaScript execution failed: {str(e)[:100]}...", symbol="  ", indent=4)
+        return False
 
 
 async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, str], info_content: str, model_manager: ModelManager) -> Dict[str, dict]:
@@ -397,7 +673,7 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
             "field_type": match_result["field_type"],
             "confidence": match_result["confidence"]
         })
-        await asyncio.sleep(0.5)  # Rate limiting
+        await asyncio.sleep(0.5)
     
     # Separate by type
     text_questions = [qm for qm in question_matches if qm["field_type"] == "text"]
@@ -422,39 +698,15 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
         log_step(f"[{filled_count+1}] TEXT: \"{question[:50]}...\"", symbol="  ", indent=1)
         log_step(f"    Answer: {answer}", symbol="  ", indent=2)
         
-        # Get fresh elements
-        elem_result = await handle_tool_call("get_interactive_elements", {
-            "viewport_mode": "all",
-            "structured_output": False
-        })
-        elements_text = elem_result[0].get("text", "") if elem_result else ""
-        
-        all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
-        all_text_indices = [int(x) for x in all_text_inputs]
-        unused_text_indices = [idx for idx in all_text_indices if idx not in used_indices]
-        
-        filled_this = False
-        for idx in unused_text_indices:
-            if filled_this:
-                break
-            try:
-                log_step(f"    👀 Watch browser - typing '{answer}'...", symbol="  ", indent=3)
-                await handle_tool_call("input_text", {"index": idx, "text": answer})
-                used_indices.append(idx)
-                filled_count += 1
-                filled_this = True
-                log_step(f"    ✅ Filled at index {idx}!", symbol="  ", indent=3)
-                await asyncio.sleep(1.5)  # Longer delay so user can see typing
-            except Exception as e:
-                continue
-        
-        if not filled_this:
+        if await fill_text_field(question, answer, used_indices):
+            filled_count += 1
+            log_step(f"    ✅ Filled!", symbol="  ", indent=3)
+        else:
             log_step(f"    ❌ Could not fill", symbol="  ", indent=3)
     
-    # Fill radio buttons - ENHANCED WITH MULTIPLE STRATEGIES
+    # Fill radio buttons
     log_step("", symbol="")
     log_step("🔘 STARTING RADIO BUTTON FILLING", symbol="🔘")
-    log_step(f"   Total radio questions: {len(radio_questions)}", symbol="  ", indent=1)
     
     for qm_idx, qm in enumerate(radio_questions, 1):
         question = qm["question"]
@@ -463,187 +715,15 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
         log_step("", symbol="")
         log_step(f"[RADIO {qm_idx}/{len(radio_questions)}] \"{question[:60]}...\"", symbol="  ", indent=1)
         log_step(f"    Expected Answer: '{answer}'", symbol="  ", indent=2)
-        log_step(f"    🔘 Using MULTIPLE strategies to find and click radio button...", symbol="  ", indent=2)
         
-        filled_radio = False
-        
-        # Strategy 1: Multiple regex patterns to find exact answer text
-        log_step(f"    📍 Strategy 1: Regex pattern matching for '{answer}'...", symbol="  ", indent=3)
-        elem_result = await handle_tool_call("get_interactive_elements", {
-            "viewport_mode": "all",
-            "structured_output": False
-        })
-        elements_text = elem_result[0].get("text", "") if elem_result else ""
-        
-        # Try multiple answer formats (Yes/yes/Y, No/no/N)
-        answer_variants = [answer]
-        if answer.lower() == "yes":
-            answer_variants.extend(["Yes", "YES", "Y"])
-        elif answer.lower() == "no":
-            answer_variants.extend(["No", "NO", "N"])
-        
-        patterns = [
-            rf'\[(\d+)\]<div[^>]*>{re.escape(answer)}<',
-            rf'\[(\d+)\][^[]*\b{re.escape(answer)}\b',
-            rf'\[(\d+)\]<span[^>]*>{re.escape(answer)}<',
-            rf'\[(\d+)\]<label[^>]*>{re.escape(answer)}<',
-            rf'\[(\d+)\]<button[^>]*>{re.escape(answer)}<',
-        ]
-        
-        # Add patterns for answer variants
-        for variant in answer_variants:
-            if variant != answer:
-                patterns.extend([
-                    rf'\[(\d+)\]<div[^>]*>{re.escape(variant)}<',
-                    rf'\[(\d+)\][^[]*\b{re.escape(variant)}\b',
-                ])
-        
-        candidate_indices = []
-        for pattern in patterns:
-            matches = re.finditer(pattern, elements_text, re.IGNORECASE)
-            for match in matches:
-                idx = int(match.group(1))
-                if idx not in candidate_indices:
-                    candidate_indices.append(idx)
-        
-        log_step(f"    ✅ Found {len(candidate_indices)} candidate indices: {candidate_indices[:15]}", symbol="  ", indent=4)
-        
-        # Try clicking each candidate
-        for attempt_num, radio_idx in enumerate(candidate_indices, 1):
-            if filled_radio:
-                break
-            try:
-                log_step(f"    Attempt {attempt_num}/{len(candidate_indices)}: Trying index {radio_idx}...", symbol="  ", indent=4)
-                log_step(f"    👀 Watch browser - clicking radio button at index {radio_idx}...", symbol="  ", indent=5)
-                
-                # Click the radio button
-                await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                await asyncio.sleep(1.5)  # Wait to see the click
-                
-                log_step(f"    ✓ Click executed at index {radio_idx}", symbol="  ", indent=5)
-                
-                # Verify selection by checking if answer appears as selected
-                log_step(f"    🔍 Verifying selection...", symbol="  ", indent=5)
-                verify_result = await handle_tool_call("get_interactive_elements", {
-                    "viewport_mode": "all",
-                    "structured_output": False
-                })
-                verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                
-                # Check multiple ways to verify
-                answer_found = answer.lower() in verify_text
-                selected_found = "selected" in verify_text or "checked" in verify_text
-                
-                if answer_found or selected_found:
-                    filled_count += 1
-                    filled_radio = True
-                    log_step(f"    ✅✅✅ SUCCESS! Radio button selected at index {radio_idx}", symbol="  ", indent=4)
-                    log_step(f"    ✅ Answer '{answer}' verified in form", symbol="  ", indent=5)
-                    break  # Stop trying other indices
-                else:
-                    log_step(f"    ⚠️  Click succeeded but answer not verified yet", symbol="  ", indent=4)
-                    # Still count as filled if click succeeded (might be delayed update)
-                    filled_count += 1
-                    filled_radio = True
-                    break
-            except Exception as e:
-                error_msg = str(e)[:60]
-                log_step(f"    ❌ Index {radio_idx} failed: {error_msg}...", symbol="  ", indent=4)
-                continue
-        
-        # Strategy 2: Try ALL radio-like elements near the question
-        if not filled_radio:
-            log_step(f"    📍 Strategy 2: Find ALL radio options near question...", symbol="  ", indent=3)
-            
-            # Get fresh elements
-            elem_result = await handle_tool_call("get_interactive_elements", {
-                "viewport_mode": "all",
-                "structured_output": False
-            })
-            elements_text = elem_result[0].get("text", "") if elem_result else ""
-            
-            # Find question position in elements text
-            question_pos = elements_text.lower().find(question.lower()[:30])
-            if question_pos > 0:
-                # Look for all clickable elements within 500 chars of question
-                search_start = max(0, question_pos - 250)
-                search_end = min(len(elements_text), question_pos + 500)
-                question_context = elements_text[search_start:search_end]
-                
-                # Find all indices in this context
-                nearby_indices = [int(m.group(1)) for m in re.finditer(r'\[(\d+)\]', question_context)]
-                log_step(f"    🔍 Found {len(nearby_indices)} elements near question", symbol="  ", indent=4)
-                
-                # Try clicking each nearby element
-                for attempt_num, radio_idx in enumerate(nearby_indices[:15], 1):  # Try first 15
-                    if filled_radio:
-                        break
-                    try:
-                        log_step(f"    Attempt {attempt_num}: Trying index {radio_idx}...", symbol="  ", indent=4)
-                        await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                        await asyncio.sleep(1.0)
-                        
-                        # Verify
-                        verify_result = await handle_tool_call("get_interactive_elements", {
-                            "viewport_mode": "all",
-                            "structured_output": False
-                        })
-                        verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                        
-                        if answer.lower() in verify_text:
-                            filled_count += 1
-                            filled_radio = True
-                            log_step(f"    ✅✅✅ SUCCESS! Radio selected at index {radio_idx} (nearby)!", symbol="  ", indent=4)
-                            break
-                    except Exception as e:
-                        continue
-        
-        # Strategy 3: Sequential search if still failed
-        if not filled_radio:
-            log_step(f"    📍 Strategy 3: Sequential search (last resort)...", symbol="  ", indent=3)
-            start_idx = (used_indices[-1] + 1) if used_indices else 0
-            end_idx = start_idx + 30  # Search wider range
-            
-            log_step(f"    🔍 Searching indices {start_idx} to {end_idx}...", symbol="  ", indent=4)
-            
-            for radio_idx in range(start_idx, end_idx):
-                if filled_radio:
-                    break
-                try:
-                    await handle_tool_call("click_element_by_index", {"index": radio_idx})
-                    await asyncio.sleep(0.5)
-                    
-                    # Verify
-                    verify_result = await handle_tool_call("get_interactive_elements", {
-                        "viewport_mode": "all",
-                        "structured_output": False
-                    })
-                    verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                    
-                    if answer.lower() in verify_text:
-                        filled_count += 1
-                        filled_radio = True
-                        log_step(f"    ✅ Radio selected at index {radio_idx} (sequential)!", symbol="  ", indent=4)
-                        break
-                except Exception:
-                    continue
-        
-        
-        if not filled_radio:
-            log_step(f"", symbol="")
-            log_step(f"    ❌❌❌ CRITICAL: ALL STRATEGIES FAILED for radio button!", symbol="  ", indent=3)
-            log_step(f"    ⚠️  Question: {question}", symbol="  ", indent=4)
-            log_step(f"    ⚠️  Expected answer: {answer}", symbol="  ", indent=4)
-            log_step(f"    ⚠️  This will cause validation to fail!", symbol="  ", indent=4)
+        if await fill_radio_button(question, answer):
+            filled_count += 1
         else:
-            log_step(f"    ✅✅✅ Radio button successfully filled and verified!", symbol="  ", indent=3)
-        
-        await asyncio.sleep(1.0)
+            log_step(f"    ❌❌❌ CRITICAL: Radio button filling failed!", symbol="  ", indent=3)
     
-    # Fill dropdowns - ENHANCED WITH MULTIPLE STRATEGIES
+    # Fill dropdowns
     log_step("", symbol="")
     log_step("🎯 STARTING DROPDOWN FILLING", symbol="🎯")
-    log_step(f"   Total dropdown questions: {len(dropdown_questions)}", symbol="  ", indent=1)
     
     for qm_idx, qm in enumerate(dropdown_questions, 1):
         question = qm["question"]
@@ -652,238 +732,29 @@ async def fill_form_fields(questions_on_form: List[str], info_data: Dict[str, st
         log_step("", symbol="")
         log_step(f"[DROPDOWN {qm_idx}/{len(dropdown_questions)}] \"{question[:60]}...\"", symbol="  ", indent=1)
         log_step(f"    Expected Answer: '{answer}'", symbol="  ", indent=2)
-        log_step(f"    🎯 Using MULTIPLE strategies to fill dropdown...", symbol="  ", indent=2)
         
-        filled_dropdown = False
-        
-        # Strategy 1: Hidden input method (typing into text input field)
-        log_step(f"    📍 Strategy 1: Hidden input method (typing '{answer}' into text field)...", symbol="  ", indent=3)
-        elem_result = await handle_tool_call("get_interactive_elements", {
-            "viewport_mode": "all",
-            "structured_output": False
-        })
-        elements_text = elem_result[0].get("text", "") if elem_result else ""
-        
-        # Find ALL text inputs (including hidden ones)
-        all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
-        all_indices = [int(x) for x in all_text_inputs]
-        unused_indices = [idx for idx in all_indices if idx not in used_indices]
-        
-        log_step(f"    Found {len(all_indices)} total text inputs, {len(unused_indices)} unused", symbol="  ", indent=4)
-        log_step(f"    Unused indices: {unused_indices[:10]}...", symbol="  ", indent=4)
-        
-        # Try each unused index systematically
-        for attempt_num, dropdown_idx in enumerate(unused_indices, 1):
-            if filled_dropdown:
-                break
-            
-            try:
-                log_step(f"    Attempt {attempt_num}/{len(unused_indices)}: Index {dropdown_idx}...", symbol="  ", indent=4)
-                log_step(f"    👀 Watch browser - typing '{answer}' into dropdown field...", symbol="  ", indent=5)
-                
-                # Type the answer
-                await handle_tool_call("input_text", {"index": dropdown_idx, "text": answer})
-                await asyncio.sleep(1.5)  # Wait to see typing
-                
-                log_step(f"    ✓ Text entered at index {dropdown_idx}", symbol="  ", indent=5)
-                
-                # Verify the value was set
-                log_step(f"    🔍 Verifying dropdown value...", symbol="  ", indent=5)
-                verify_result = await handle_tool_call("get_interactive_elements", {
-                    "viewport_mode": "all",
-                    "structured_output": False
-                })
-                verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                
-                # Check if answer appears in the form
-                if answer.lower() in verify_text.lower():
-                    used_indices.append(dropdown_idx)
-                    filled_count += 1
-                    filled_dropdown = True
-                    log_step(f"    ✅✅✅ SUCCESS! Dropdown filled at index {dropdown_idx}", symbol="  ", indent=4)
-                    log_step(f"    ✅ Answer '{answer}' verified in form", symbol="  ", indent=5)
-                    await asyncio.sleep(1)
-                    break  # Stop trying other indices
-                else:
-                    # Still count as success if no exception (might be delayed update)
-                    log_step(f"    ⚠️  Value entered but verification unclear", symbol="  ", indent=5)
-                    used_indices.append(dropdown_idx)
-                    filled_count += 1
-                    filled_dropdown = True
-                    log_step(f"    ✅ Dropdown filled at index {dropdown_idx} (assuming success)", symbol="  ", indent=5)
-                    await asyncio.sleep(1)
-                    break
-                    
-            except Exception as e:
-                error_msg = str(e)[:60]
-                log_step(f"    ❌ Index {dropdown_idx} failed: {error_msg}...", symbol="  ", indent=5)
-                continue
-        
-        # Strategy 2: Try ALL unused text inputs more aggressively
-        if not filled_dropdown:
-            log_step(f"    📍 Strategy 2: Aggressive search - trying ALL unused text inputs...", symbol="  ", indent=3)
-            
-            # Get fresh elements
-            elem_result = await handle_tool_call("get_interactive_elements", {
-                "viewport_mode": "all",
-                "structured_output": False
-            })
-            elements_text = elem_result[0].get("text", "") if elem_result else ""
-            
-            # Find question position
-            question_pos = elements_text.lower().find(question.lower()[:30])
-            if question_pos > 0:
-                # Find all text inputs near the question
-                search_start = max(0, question_pos - 300)
-                search_end = min(len(elements_text), question_pos + 600)
-                question_context = elements_text[search_start:search_end]
-                
-                # Find all text input indices in this context
-                nearby_text_inputs = [int(m.group(1)) for m in re.finditer(r'\[(\d+)\]<input type=\'text\'>', question_context)]
-                nearby_unused = [idx for idx in nearby_text_inputs if idx not in used_indices]
-                
-                log_step(f"    🔍 Found {len(nearby_unused)} unused text inputs near question", symbol="  ", indent=4)
-                
-                # Try each nearby input
-                for attempt_num, dropdown_idx in enumerate(nearby_unused[:10], 1):
-                    if filled_dropdown:
-                        break
-                    try:
-                        log_step(f"    Attempt {attempt_num}: Index {dropdown_idx} (near question)...", symbol="  ", indent=4)
-                        log_step(f"    👀 Watch browser - typing '{answer}'...", symbol="  ", indent=5)
-                        await handle_tool_call("input_text", {"index": dropdown_idx, "text": answer})
-                        await asyncio.sleep(1.5)
-                        
-                        # Verify
-                        verify_result = await handle_tool_call("get_interactive_elements", {
-                            "viewport_mode": "all",
-                            "structured_output": False
-                        })
-                        verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                        
-                        if answer.lower() in verify_text.lower():
-                            used_indices.append(dropdown_idx)
-                            filled_count += 1
-                            filled_dropdown = True
-                            log_step(f"    ✅✅✅ SUCCESS! Dropdown filled at index {dropdown_idx} (nearby)!", symbol="  ", indent=4)
-                            break
-                    except Exception:
-                        continue
-        
-        # Strategy 3: Try all remaining unused indices (broader search)
-        if not filled_dropdown:
-            log_step(f"    Strategy 3: Broader search - trying ALL unused text inputs...", symbol="  ", indent=3)
-            
-            # Get fresh elements
-            elem_result = await handle_tool_call("get_interactive_elements", {
-                "viewport_mode": "all",
-                "structured_output": False
-            })
-            elements_text = elem_result[0].get("text", "") if elem_result else ""
-            
-            all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
-            all_indices = [int(x) for x in all_text_inputs]
-            unused_indices = [idx for idx in all_indices if idx not in used_indices]
-            
-            log_step(f"    Trying {len(unused_indices)} remaining unused indices...", symbol="  ", indent=4)
-            
-            for idx in unused_indices:
-                if filled_dropdown:
-                    break
-                try:
-                    await handle_tool_call("input_text", {"index": idx, "text": answer})
-                    await asyncio.sleep(0.5)
-                    
-                    # Quick verification
-                    verify_result = await handle_tool_call("get_interactive_elements", {
-                        "viewport_mode": "all",
-                        "structured_output": False
-                    })
-                    verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                    
-                    if answer.lower() in verify_text or len(verify_text) > 0:
-                        used_indices.append(idx)
-                        filled_count += 1
-                        filled_dropdown = True
-                        log_step(f"    ✅ Dropdown filled at index {idx} (broader search)!", symbol="  ", indent=5)
-                        await asyncio.sleep(1)
-                except Exception:
-                    continue
-        
-        # Strategy 4: Try typing answer character by character (for stubborn dropdowns)
-        if not filled_dropdown:
-            log_step(f"    Strategy 4: Character-by-character typing...", symbol="  ", indent=3)
-            
-            elem_result = await handle_tool_call("get_interactive_elements", {
-                "viewport_mode": "all",
-                "structured_output": False
-            })
-            elements_text = elem_result[0].get("text", "") if elem_result else ""
-            
-            all_text_inputs = re.findall(r'\[(\d+)\]<input type=\'text\'>', elements_text)
-            unused_indices = [int(x) for x in all_text_inputs if int(x) not in used_indices]
-            
-            for idx in unused_indices[:5]:  # Try first 5 unused
-                if filled_dropdown:
-                    break
-                try:
-                    # Type character by character
-                    for char in answer:
-                        await handle_tool_call("input_text", {"index": idx, "text": char})
-                        await asyncio.sleep(0.1)
-                    
-                    await asyncio.sleep(0.5)
-                    
-                    # Verify
-                    verify_result = await handle_tool_call("get_interactive_elements", {
-                        "viewport_mode": "all",
-                        "structured_output": False
-                    })
-                    verify_text = verify_result[0].get("text", "").lower() if verify_result else ""
-                    
-                    if answer.lower() in verify_text:
-                        used_indices.append(idx)
-                        filled_count += 1
-                        filled_dropdown = True
-                        log_step(f"    ✅ Dropdown filled at index {idx} (char-by-char)!", symbol="  ", indent=4)
-                        await asyncio.sleep(1)
-                except Exception:
-                    continue
-        
-        if not filled_dropdown:
-            log_step(f"", symbol="")
-            log_step(f"    ❌❌❌ CRITICAL: ALL STRATEGIES FAILED for dropdown!", symbol="  ", indent=3)
-            log_step(f"    ⚠️  Question: {question}", symbol="  ", indent=4)
-            log_step(f"    ⚠️  Expected answer: {answer}", symbol="  ", indent=4)
-            log_step(f"    ⚠️  Tried {len(unused_indices)} different indices", symbol="  ", indent=4)
-            log_step(f"    ⚠️  This will cause validation to fail!", symbol="  ", indent=4)
+        if await fill_dropdown(question, answer):
+            filled_count += 1
         else:
-            log_step(f"    ✅✅✅ Dropdown successfully filled and verified!", symbol="  ", indent=3)
-        
-        await asyncio.sleep(1.0)
+            log_step(f"    ❌❌❌ CRITICAL: Dropdown filling failed!", symbol="  ", indent=3)
     
     log_step(f"✅ Filled {filled_count}/{len(questions_on_form)} fields", symbol="✅")
     
-    # Return question matches for validation
     return {qm["question"]: qm for qm in question_matches}
 
 
 async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
-    """Validation 1: Check if all questions are answered - ENHANCED for radio/dropdown"""
+    """Validation 1: Check if all questions are answered"""
     log_section("VALIDATION 1: COMPLETENESS CHECK")
     log_step("🔍 Checking if all questions are answered...", symbol="🔍")
-    log_step("   Using enhanced detection for radio buttons and dropdowns...", symbol="  ", indent=1)
     
-    await asyncio.sleep(2)  # Wait for form to stabilize
+    await asyncio.sleep(2)
+    
+    session = await get_browser_session()
+    page = await session.get_current_page()
     
     md_result = await handle_tool_call("get_comprehensive_markdown", {})
     current_page_text = md_result[0].get("text", "").lower() if md_result else ""
-    
-    elem_result = await handle_tool_call("get_interactive_elements", {
-        "viewport_mode": "all",
-        "structured_output": False
-    })
-    current_elements_text = elem_result[0].get("text", "").lower() if elem_result else ""
     
     all_answered = True
     answered_count = 0
@@ -895,62 +766,116 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
         answer_found = False
         
         if field_type == "text":
-            # Text fields: Check if answer appears in form
-            if expected_answer.lower() in current_elements_text or expected_answer.lower() in current_page_text:
+            answer_lower = expected_answer.lower()
+            if answer_lower in current_page_text:
                 answer_found = True
-            # Also check for partial matches (in case of formatting)
-            elif len(expected_answer) > 5:
-                # Check if key parts of answer are present
-                key_parts = expected_answer.lower().split()
-                if len(key_parts) >= 2:
-                    if all(part in current_elements_text or part in current_page_text for part in key_parts[:2]):
-                        answer_found = True
-        
-        elif field_type == "radio":
-            # Radio buttons: Enhanced detection
-            answer_variants = [expected_answer.lower()]
-            if expected_answer.lower() == "yes":
-                answer_variants.extend(["yes", "y"])
-            elif expected_answer.lower() == "no":
-                answer_variants.extend(["no", "n"])
-            
-            # Check if answer appears in elements
-            for variant in answer_variants:
-                if variant in current_elements_text:
-                    answer_found = True
-                    break
-            
-            # Also check for radio button selection indicators
-            radio_patterns = [
-                rf'checked[^>]*{re.escape(expected_answer)}',
-                rf'selected[^>]*{re.escape(expected_answer)}',
-                rf'aria-checked[^>]*true[^>]*{re.escape(expected_answer)}',
-            ]
-            for pattern in radio_patterns:
-                if re.search(pattern, current_elements_text, re.IGNORECASE):
-                    answer_found = True
-                    break
-        
-        elif field_type == "dropdown":
-            # Dropdowns: Enhanced detection
-            if expected_answer.lower() in current_elements_text or expected_answer.lower() in current_page_text:
-                answer_found = True
-            else:
-                # Check for dropdown selection indicators
-                dropdown_patterns = [
-                    rf'selected[^>]*{re.escape(expected_answer)}',
-                    rf'value[^>]*{re.escape(expected_answer)}',
+            elif "-" in expected_answer:
+                # Try date formats
+                date_formats = [
+                    expected_answer.lower(),
+                    expected_answer.replace("-", " ").lower(),
+                    expected_answer.replace("-", "/").lower(),
                 ]
-                for pattern in dropdown_patterns:
-                    if re.search(pattern, current_elements_text, re.IGNORECASE):
+                for fmt in date_formats:
+                    if fmt in current_page_text:
                         answer_found = True
                         break
+        
+        elif field_type == "radio":
+            # Use JavaScript to check if radio is checked
+            js_check = f"""
+            (function() {{
+                const questionText = {json.dumps(question)};
+                const answerValue = {json.dumps(expected_answer)};
                 
-                # Also check if dropdown has any value set (might be our answer)
-                # Look for input fields with values
-                input_with_value = re.search(rf'<input[^>]*value[^>]*{re.escape(expected_answer)}', current_elements_text, re.IGNORECASE)
-                if input_with_value:
-                    answer_found = True
+                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+                let targetHeading = null;
+                for (const heading of headings) {{
+                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                        targetHeading = heading;
+                        break;
+                    }}
+                }}
+                
+                if (!targetHeading) return {{found: false}};
+                
+                let radioGroup = targetHeading.parentElement.querySelector('[role="radiogroup"]');
+                if (!radioGroup) {{
+                    let nextSibling = targetHeading.parentElement.nextElementSibling;
+                    let searchCount = 0;
+                    while (nextSibling && searchCount < 5) {{
+                        const group = nextSibling.querySelector('[role="radiogroup"]');
+                        if (group) {{
+                            radioGroup = group;
+                            break;
+                        }}
+                        nextSibling = nextSibling.nextElementSibling;
+                        searchCount++;
+                    }}
+                }}
+                
+                if (!radioGroup) return {{found: false}};
+                
+                const radio = radioGroup.querySelector(`[role="radio"][data-value="${{answerValue}}"]`);
+                if (radio && radio.getAttribute('aria-checked') === 'true') {{
+                    return {{found: true}};
+                }}
+                return {{found: false}};
+            }})();
+            """
+            try:
+                result = await page.evaluate(js_check)
+                answer_found = result.get("found", False)
+            except Exception:
+                answer_found = expected_answer.lower() in current_page_text
+        
+        elif field_type == "dropdown":
+            # Use JavaScript to check if dropdown is selected
+            js_check = f"""
+            (function() {{
+                const questionText = {json.dumps(question)};
+                const answerValue = {json.dumps(expected_answer)};
+                
+                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+                let targetHeading = null;
+                for (const heading of headings) {{
+                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                        targetHeading = heading;
+                        break;
+                    }}
+                }}
+                
+                if (!targetHeading) return {{found: false}};
+                
+                let listbox = targetHeading.parentElement.querySelector('[role="listbox"]');
+                if (!listbox) {{
+                    let nextSibling = targetHeading.parentElement.nextElementSibling;
+                    let searchCount = 0;
+                    while (nextSibling && searchCount < 5) {{
+                        const box = nextSibling.querySelector('[role="listbox"]');
+                        if (box) {{
+                            listbox = box;
+                            break;
+                        }}
+                        nextSibling = nextSibling.nextElementSibling;
+                        searchCount++;
+                    }}
+                }}
+                
+                if (!listbox) return {{found: false}};
+                
+                const option = listbox.querySelector(`[role="option"][data-value="${{answerValue}}"]`);
+                if (option && option.getAttribute('aria-selected') === 'true') {{
+                    return {{found: true}};
+                }}
+                return {{found: false}};
+            }})();
+            """
+            try:
+                result = await page.evaluate(js_check)
+                answer_found = result.get("found", False)
+            except Exception:
+                answer_found = expected_answer.lower() in current_page_text
         
         status_icon = "✅" if answer_found else "❌"
         log_step(f"{status_icon} {question[:50]}... ({field_type})", symbol="  ", indent=1)
@@ -972,27 +897,19 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
         log_step("✅ VALIDATION 1 PASSED: All questions are answered!", symbol="✅")
     else:
         log_step("❌ VALIDATION 1 FAILED: Some questions are not answered!", symbol="❌")
-        log_step("   Missing answers will prevent form submission", symbol="  ", indent=1)
     
     return all_answered
 
 
 async def validate_accuracy(question_matches: Dict[str, dict]) -> bool:
-    """Validation 2: Check if all answers match INFO.md - ENHANCED for radio/dropdown"""
+    """Validation 2: Check if all answers match INFO.md"""
     log_section("VALIDATION 2: ACCURACY CHECK")
     log_step("🔍 Checking if all answers match INFO.md...", symbol="🔍")
-    log_step("   Verifying answers are correct and match expected values...", symbol="  ", indent=1)
     
     await asyncio.sleep(2)
     
-    md_result = await handle_tool_call("get_comprehensive_markdown", {})
-    current_page_text = md_result[0].get("text", "").lower() if md_result else ""
-    
-    elem_result = await handle_tool_call("get_interactive_elements", {
-        "viewport_mode": "all",
-        "structured_output": False
-    })
-    current_elements_text = elem_result[0].get("text", "").lower() if elem_result else ""
+    session = await get_browser_session()
+    page = await session.get_current_page()
     
     all_correct = True
     correct_count = 0
@@ -1004,55 +921,99 @@ async def validate_accuracy(question_matches: Dict[str, dict]) -> bool:
         is_correct = False
         
         if field_type == "text":
-            # Text fields: Exact or partial match
-            if expected_answer.lower() in current_elements_text or expected_answer.lower() in current_page_text:
-                is_correct = True
-            # Allow partial matches for longer answers
-            elif len(expected_answer) > 10:
-                key_words = expected_answer.lower().split()
-                if len(key_words) >= 2:
-                    # Check if at least 2 key words match
-                    matches = sum(1 for word in key_words[:3] if word in current_elements_text or word in current_page_text)
-                    if matches >= 2:
-                        is_correct = True
+            md_result = await handle_tool_call("get_comprehensive_markdown", {})
+            current_page_text = md_result[0].get("text", "").lower() if md_result else ""
+            is_correct = expected_answer.lower() in current_page_text
         
         elif field_type == "radio":
-            # Radio buttons: Check for exact answer match
-            answer_variants = [expected_answer.lower()]
-            if expected_answer.lower() == "yes":
-                answer_variants.extend(["yes", "y"])
-            elif expected_answer.lower() == "no":
-                answer_variants.extend(["no", "n"])
-            
-            # Check if correct answer is selected
-            for variant in answer_variants:
-                if variant in current_elements_text:
-                    # Verify it's actually selected (not just present)
-                    # Look for selection indicators near the answer
-                    answer_pos = current_elements_text.find(variant)
-                    if answer_pos > 0:
-                        context = current_elements_text[max(0, answer_pos-50):answer_pos+50]
-                        if any(indicator in context for indicator in ["checked", "selected", "true", "✓"]):
-                            is_correct = True
-                            break
-                    else:
-                        is_correct = True
-                        break
+            js_check = f"""
+            (function() {{
+                const questionText = {json.dumps(question)};
+                const answerValue = {json.dumps(expected_answer)};
+                
+                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+                let targetHeading = null;
+                for (const heading of headings) {{
+                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                        targetHeading = heading;
+                        break;
+                    }}
+                }}
+                
+                if (!targetHeading) return {{correct: false}};
+                
+                let radioGroup = targetHeading.parentElement.querySelector('[role="radiogroup"]');
+                if (!radioGroup) {{
+                    let nextSibling = targetHeading.parentElement.nextElementSibling;
+                    let searchCount = 0;
+                    while (nextSibling && searchCount < 5) {{
+                        const group = nextSibling.querySelector('[role="radiogroup"]');
+                        if (group) {{
+                            radioGroup = group;
+                            break;
+                        }}
+                        nextSibling = nextSibling.nextElementSibling;
+                        searchCount++;
+                    }}
+                }}
+                
+                if (!radioGroup) return {{correct: false}};
+                
+                const radio = radioGroup.querySelector(`[role="radio"][data-value="${{answerValue}}"]`);
+                is_correct = radio && radio.getAttribute('aria-checked') === 'true';
+                return {{correct: is_correct}};
+            }})();
+            """
+            try:
+                result = await page.evaluate(js_check)
+                is_correct = result.get("correct", False)
+            except Exception:
+                is_correct = False
         
         elif field_type == "dropdown":
-            # Dropdowns: Check for exact answer match
-            if expected_answer.lower() in current_elements_text or expected_answer.lower() in current_page_text:
-                is_correct = True
-            else:
-                # Check for dropdown value attributes
-                dropdown_patterns = [
-                    rf'value[^>]*=.*{re.escape(expected_answer)}',
-                    rf'selected[^>]*{re.escape(expected_answer)}',
-                ]
-                for pattern in dropdown_patterns:
-                    if re.search(pattern, current_elements_text, re.IGNORECASE):
-                        is_correct = True
-                        break
+            js_check = f"""
+            (function() {{
+                const questionText = {json.dumps(question)};
+                const answerValue = {json.dumps(expected_answer)};
+                
+                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+                let targetHeading = null;
+                for (const heading of headings) {{
+                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                        targetHeading = heading;
+                        break;
+                    }}
+                }}
+                
+                if (!targetHeading) return {{correct: false}};
+                
+                let listbox = targetHeading.parentElement.querySelector('[role="listbox"]');
+                if (!listbox) {{
+                    let nextSibling = targetHeading.parentElement.nextElementSibling;
+                    let searchCount = 0;
+                    while (nextSibling && searchCount < 5) {{
+                        const box = nextSibling.querySelector('[role="listbox"]');
+                        if (box) {{
+                            listbox = box;
+                            break;
+                        }}
+                        nextSibling = nextSibling.nextElementSibling;
+                        searchCount++;
+                    }}
+                }}
+                
+                if (!listbox) return {{correct: false}};
+                
+                const option = listbox.querySelector(`[role="option"][data-value="${{answerValue}}"]`);
+                is_correct = option && option.getAttribute('aria-selected') === 'true';
+                return {{correct: is_correct}};
+            }})();
+            """
+            try:
+                result = await page.evaluate(js_check)
+                is_correct = result.get("correct", False)
+            except Exception:
+                is_correct = False
         
         status_icon = "✅" if is_correct else "❌"
         log_step(f"{status_icon} {question[:50]}... ({field_type})", symbol="  ", indent=1)
@@ -1073,47 +1034,15 @@ async def validate_accuracy(question_matches: Dict[str, dict]) -> bool:
         log_step("✅ VALIDATION 2 PASSED: All answers match INFO.md!", symbol="✅")
     else:
         log_step("❌ VALIDATION 2 FAILED: Some answers don't match INFO.md!", symbol="❌")
-        log_step("   Incorrect answers will prevent form submission", symbol="  ", indent=1)
     
     return all_correct
 
 
-async def wait_for_user_confirmation(prompt: str) -> bool:
-    """Human-in-the-loop: Wait for user to confirm before proceeding"""
-    import concurrent.futures
-    
-    log_step("", symbol="")
-    log_section("HUMAN-IN-THE-LOOP - AWAITING YOUR CONFIRMATION")
-    log_step(prompt, symbol="👤")
-    log_step("", symbol="")
-    log_step("   Type 'yes' or 'y' to continue", symbol="  ", indent=1)
-    log_step("   Type 'no' or 'n' to stop", symbol="  ", indent=1)
-    log_step("", symbol="")
-    
-    # Run input() in executor to avoid blocking async
-    loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        try:
-            user_input = await loop.run_in_executor(executor, input, "   Your response: ")
-            user_input = user_input.strip().lower()
-            
-            if user_input in ['yes', 'y', '']:
-                log_step("   ✅ User confirmed - proceeding...", symbol="  ", indent=1)
-                return True
-            else:
-                log_step("   ❌ User declined - stopping execution", symbol="  ", indent=1)
-                return False
-        except (EOFError, KeyboardInterrupt):
-            log_step("   ❌ Input cancelled - stopping execution", symbol="  ", indent=1)
-            return False
-
-
 async def submit_form() -> bool:
-    """Submit the form - ONLY ONCE, NO RETRIES - Then wait for human confirmation"""
-    log_section("STEP 6: SUBMITTING FORM (ONE TIME ONLY)")
+    """Submit the form"""
+    log_section("STEP 6: SUBMITTING FORM")
     
     log_step("🔍 Finding Submit button...", symbol="🔍")
-    log_step("   ⚠️  IMPORTANT: Form will be submitted ONCE only", symbol="  ", indent=1)
     
     elem_result = await handle_tool_call("get_interactive_elements", {
         "viewport_mode": "all",
@@ -1121,83 +1050,29 @@ async def submit_form() -> bool:
     })
     elements_text = elem_result[0].get("text", "") if elem_result else ""
     
-    # Find Submit button
     submit_match = re.search(r'\[(\d+)\]<span>Submit', elements_text)
     if submit_match:
         submit_idx = int(submit_match.group(1))
         log_step(f"   ✅ Found Submit button at index {submit_idx}", symbol="  ", indent=1)
+        
+        log_step("🖱️  Clicking Submit button...", symbol="🖱️", indent=1)
+        log_step("   👀 Watch browser - form will be submitted now...", symbol="  ", indent=2)
+        
+        try:
+            await handle_tool_call("click_element_by_index", {"index": submit_idx})
+            await asyncio.sleep(3)
+            log_step("✅ Submit button clicked!", symbol="✅", indent=1)
+            return True
+        except Exception as e:
+            log_step(f"❌ Error clicking submit: {e}", symbol="❌", indent=1)
+            return False
     else:
-        submit_match = re.search(r'\[(\d+)\][^[]*submit', elements_text, re.IGNORECASE)
-        submit_idx = int(submit_match.group(1)) if submit_match else None
-        if submit_idx:
-            log_step(f"   ✅ Found Submit button at index {submit_idx} (alternative pattern)", symbol="  ", indent=1)
-    
-    if submit_idx is None:
-        log_step("❌ Could not find Submit button", symbol="❌")
-        log_step("   ⚠️  Cannot submit form - Submit button not found", symbol="  ", indent=1)
-        return False
-    
-    log_step("", symbol="")
-    log_step(f"🖱️  CLICKING SUBMIT BUTTON NOW (index {submit_idx})...", symbol="🖱️")
-    log_step("   👀 Watch the browser - Submit button will be clicked...", symbol="  ", indent=1)
-    log_step("   ⚠️  This is a ONE-TIME click - no retries", symbol="  ", indent=1)
-    
-    try:
-        await handle_tool_call("click_element_by_index", {"index": submit_idx})
-        log_step("   ✅ Submit button clicked successfully", symbol="  ", indent=1)
-    except Exception as e:
-        log_step(f"   ❌ Submit failed: {str(e)[:60]}...", symbol="  ", indent=1)
-        return False
-    
-    log_step("⏳ Waiting 3 seconds for form to process...", symbol="⏳", indent=1)
-    await asyncio.sleep(3)  # Brief wait
-    
-    # HUMAN-IN-THE-LOOP: Wait for user to confirm submission
-    log_step("", symbol="")
-    confirmed = await wait_for_user_confirmation(
-        "👤 Please check the browser window:\n"
-        "   • Did the form submit successfully?\n"
-        "   • Do you see a confirmation message?\n"
-        "   • Are there any error messages?"
-    )
-    
-    if not confirmed:
-        log_section("EXECUTION STOPPED BY USER")
-        log_step("🛑 User declined to proceed - execution stopped", symbol="🛑")
-        return False
-    
-    log_step("⏳ Waiting for final submission confirmation...", symbol="⏳", indent=1)
-    await asyncio.sleep(3)  # Additional wait after confirmation
-    
-    # Verify submission
-    log_step("🔍 Verifying submission...", symbol="🔍", indent=1)
-    final_result = await handle_tool_call("get_comprehensive_markdown", {})
-    final_text = final_result[0].get("text", "").lower() if final_result else ""
-    
-    elem_result = await handle_tool_call("get_interactive_elements", {
-        "viewport_mode": "all",
-        "structured_output": False
-    })
-    elem_text = (elem_result[0].get("text", "").lower() if elem_result else "")
-    
-    success_indicators = ["recorded", "submit another", "view score", "thanks", "response"]
-    is_success = any(ind in final_text or ind in elem_text for ind in success_indicators)
-    
-    if is_success:
-        log_step("✅ Form submitted successfully!", symbol="✅")
-        return True
-    else:
-        log_step("⚠️  Submission status unclear - check browser", symbol="⚠️")
+        log_step("⚠️  Could not find Submit button", symbol="⚠️")
         return False
 
 
 async def fill_google_form(use_memory: bool = False):
-    """
-    Main function to fill Google Form with comprehensive validation
-    
-    Args:
-        use_memory: If False, bypasses memory search to ensure fresh execution
-    """
+    """Main function to fill Google Form with comprehensive validation"""
     
     log_section("GOOGLE FORM FILLER WITH VALIDATION")
     log_step(f"Target URL: {GOOGLE_FORM_URL}", symbol="🌐")
@@ -1207,14 +1082,7 @@ async def fill_google_form(use_memory: bool = False):
     
     log_step("", symbol="")
     log_step("👀 IMPORTANT: Watch the browser window - all actions will be visible!", symbol="👀")
-    log_step("   The browser will open and you'll see:", symbol="  ", indent=1)
-    log_step("   1. Form opening", symbol="  ", indent=2)
-    log_step("   2. Fields being filled one by one", symbol="  ", indent=2)
-    log_step("   3. Form submission", symbol="  ", indent=2)
-    log_step("   4. Submission confirmation", symbol="  ", indent=2)
-    log_step("", symbol="")
     
-    # Initialize Model Manager (should use Groq based on profiles.yaml)
     model_manager = ModelManager()
     log_step(f"🤖 Using LLM: {model_manager.model_type} - {model_manager.model_info.get('model', 'default')}", symbol="🤖")
     
@@ -1234,7 +1102,7 @@ async def fill_google_form(use_memory: bool = False):
         log_step("   👀 Watch the browser window - form will open now...", symbol="  ", indent=1)
         await handle_tool_call("open_tab", {"url": GOOGLE_FORM_URL})
         log_step("   ⏳ Waiting for form to load...", symbol="  ", indent=1)
-        await asyncio.sleep(4)  # Longer delay so user can see form opening
+        await asyncio.sleep(4)
         log_step("   ✅ Form opened! Check your browser window.", symbol="  ", indent=1)
         
         # Step 2.5: Handle login
@@ -1244,10 +1112,8 @@ async def fill_google_form(use_memory: bool = False):
         
         await asyncio.sleep(2)
         
-        # Step 3: Extract questions (skip clearing - form should be fresh)
-        log_section("STEP 3: EXTRACTING QUESTIONS")
-        log_step("📋 Skipping field clearing - assuming form is fresh", symbol="📋")
-        log_step("   If form has old data, please refresh the page manually", symbol="  ", indent=1)
+        # Step 3: Clear form
+        await clear_all_fields()
         
         # Step 4: Extract questions
         questions_on_form = await extract_questions_from_form()
@@ -1267,11 +1133,7 @@ async def fill_google_form(use_memory: bool = False):
             log_step("❌❌❌ VALIDATION 1 (COMPLETENESS) FAILED", symbol="❌")
             log_step("", symbol="")
             log_step("🛑 EXECUTION STOPPED - Form will NOT be submitted", symbol="🛑")
-            log_step("   Reason: Not all questions are answered", symbol="  ", indent=1)
-            log_step("   Action: Please check the form and fix missing answers", symbol="  ", indent=1)
-            log_step("   Browser will stay open for manual review", symbol="  ", indent=1)
-            log_step("", symbol="")
-            return {"status": "validation_failed", "message": "Validation 1 (completeness) failed - execution stopped"}
+            return {"status": "validation_failed", "message": "Validation 1 (completeness) failed"}
         
         # Step 7: Validation 2 - Accuracy
         validation2_passed = await validate_accuracy(question_matches)
@@ -1282,36 +1144,32 @@ async def fill_google_form(use_memory: bool = False):
             log_step("❌❌❌ VALIDATION 2 (ACCURACY) FAILED", symbol="❌")
             log_step("", symbol="")
             log_step("🛑 EXECUTION STOPPED - Form will NOT be submitted", symbol="🛑")
-            log_step("   Reason: Answers don't match INFO.md", symbol="  ", indent=1)
-            log_step("   Action: Please check the form and fix incorrect answers", symbol="  ", indent=1)
-            log_step("   Browser will stay open for manual review", symbol="  ", indent=1)
-            log_step("", symbol="")
-            return {"status": "validation_failed", "message": "Validation 2 (accuracy) failed - execution stopped"}
+            return {"status": "validation_failed", "message": "Validation 2 (accuracy) failed"}
         
-        # Step 8: Submit (only if both validations passed)
+        # Step 8: Submit form
         log_section("FINAL SUMMARY")
         log_step("✅ Validation 1 (Completeness): PASSED", symbol="✅")
         log_step("✅ Validation 2 (Accuracy): PASSED", symbol="✅")
-        log_step("🚀 Both validations passed - Proceeding to submit...", symbol="🚀")
+        log_step("✅ Both validations passed - Submitting form!", symbol="✅")
         
         submit_success = await submit_form()
         
         if submit_success:
-            log_section("SUCCESS - FORM SUBMITTED!")
-            log_step("🎉🎉🎉 FORM SUBMITTED SUCCESSFULLY! 🎉🎉🎉", symbol="🎉")
+            log_section("SUCCESS - FORM SUBMITTED")
+            log_step("🎉🎉🎉 FORM FILLING COMPLETED! 🎉🎉🎉", symbol="🎉")
             log_step("", symbol="")
             log_step("✅ All steps completed:", symbol="✅")
             log_step("   ✓ Form opened", symbol="  ", indent=1)
+            log_step("   ✓ Form cleared", symbol="  ", indent=1)
             log_step("   ✓ All fields filled", symbol="  ", indent=1)
             log_step("   ✓ Validation 1 (Completeness) passed", symbol="  ", indent=1)
             log_step("   ✓ Validation 2 (Accuracy) passed", symbol="  ", indent=1)
             log_step("   ✓ Form submitted", symbol="  ", indent=1)
             log_step("", symbol="")
-            log_step("👀 CHECK YOUR BROWSER WINDOW to see the submission confirmation!", symbol="👀")
-            return {"status": "success", "message": "Form submitted successfully"}
+            return {"status": "success", "message": "Form filled and submitted successfully"}
         else:
-            log_step("⚠️  Submission may have failed - check browser", symbol="⚠️")
-            return {"status": "partial_success", "message": "Form filled but submission unclear"}
+            log_step("⚠️  Form submission may have failed - check browser", symbol="⚠️")
+            return {"status": "partial_success", "message": "Form filled but submission may have failed"}
     
     except Exception as e:
         log_section("ERROR")
@@ -1324,14 +1182,12 @@ async def fill_google_form(use_memory: bool = False):
 async def main():
     import sys
     
-    # Check if --fresh flag is passed to bypass memory
     use_memory = "--use-memory" in sys.argv
     fresh_mode = "--fresh" in sys.argv or not use_memory
     
     if fresh_mode:
         log_section("FRESH MODE ENABLED")
         log_step("🔄 Running in FRESH mode - memory will be bypassed", symbol="🔄")
-        log_step("   This ensures the task runs without old memory interference", symbol="  ", indent=1)
         log_step("", symbol="")
     
     try:
@@ -1339,28 +1195,22 @@ async def main():
         
         if result.get("status") == "success":
             log_section("COMPLETION - BROWSER STAYS OPEN")
-            log_step("🎉 Form submission completed!", symbol="🎉")
+            log_step("🎉 Form filling completed!", symbol="🎉")
             log_step("", symbol="")
-            log_step("👀 CHECK YOUR BROWSER WINDOW:", symbol="👀")
-            log_step("   • You should see the submission confirmation page", symbol="  ", indent=1)
-            log_step("   • The form has been successfully submitted", symbol="  ", indent=1)
-            log_step("   • All fields were filled correctly", symbol="  ", indent=1)
-            log_step("", symbol="")
-            log_step("🌐 Browser will stay open for 10 minutes for you to review...", symbol="🌐")
-            log_step("💡 Press Ctrl+C when done reviewing to close the browser", symbol="💡")
+            log_step("🌐 Browser will stay open for 10 minutes for review...", symbol="🌐")
+            log_step("💡 Press Ctrl+C when done to close the browser", symbol="💡")
             log_step("", symbol="")
             
             try:
-                # Countdown timer so user knows how long browser stays open
                 for minute in range(10, 0, -1):
-                    await asyncio.sleep(60)  # Wait 1 minute
+                    await asyncio.sleep(60)
                     log_step(f"⏰ Browser will stay open for {minute-1} more minutes... (Press Ctrl+C to close now)", symbol="⏰")
             except KeyboardInterrupt:
                 log_step("", symbol="")
                 log_step("👋 Closing browser as requested...", symbol="👋")
         
         return 0 if result.get("status") == "success" else 1
-        
+    
     except Exception as e:
         log_step(f"❌ Fatal error: {e}", symbol="❌")
         import traceback
