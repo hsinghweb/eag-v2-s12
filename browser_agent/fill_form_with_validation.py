@@ -607,48 +607,78 @@ async def fill_radio_button(question: str, answer: str) -> bool:
             log_step(f"    ⚠️  {error_msg}", symbol="  ", indent=4)
             return False
         
-        # Wait a bit more for any async updates
-        await asyncio.sleep(0.8)
+        # Wait longer for any async updates and state persistence
+        await asyncio.sleep(1.5)
         
-        # Final verification
+        # Final verification using same pattern as validation
         is_checked = result.get("checked", False)
         
-        if is_checked:
+        # Always do a second verification check to ensure state persisted
+        js_verify = f"""
+        (function() {{
+            const questionText = {json.dumps(question)};
+            const answerValue = {json.dumps(answer)};
+            
+            function findQuestionHeading(questionText) {{
+                const headings = Array.from(document.querySelectorAll('h3, h4, h5, [role="heading"]'));
+                const questionKey = questionText.split('?')[0].trim().toLowerCase();
+                for (const heading of headings) {{
+                    const headingText = heading.textContent ? heading.textContent.trim().toLowerCase() : '';
+                    if (headingText.includes(questionKey) || questionKey.includes(headingText.split(' ')[0])) {{
+                        return heading;
+                    }}
+                }}
+                return null;
+            }}
+            
+            const targetHeading = findQuestionHeading(questionText);
+            if (!targetHeading) return {{checked: false}};
+            
+            function findRadioGroup(heading) {{
+                let element = heading.parentElement;
+                let depth = 0;
+                while (element && depth < 5) {{
+                    const group = element.querySelector('[role="radiogroup"]');
+                    if (group) return group;
+                    element = element.parentElement;
+                    depth++;
+                }}
+                let sibling = heading.parentElement.nextElementSibling;
+                let count = 0;
+                while (sibling && count < 10) {{
+                    const group = sibling.querySelector('[role="radiogroup"]');
+                    if (group) return group;
+                    sibling = sibling.nextElementSibling;
+                    count++;
+                }}
+                return null;
+            }}
+            
+            const radioGroup = findRadioGroup(targetHeading);
+            if (!radioGroup) return {{checked: false}};
+            
+            const radio = radioGroup.querySelector(`[role="radio"][data-value="${{answerValue}}"]`);
+            return {{checked: radio && radio.getAttribute('aria-checked') === 'true'}};
+        }})();
+        """
+        
+        verify_result = await page.evaluate(js_verify)
+        final_checked = verify_result.get("checked", False) if verify_result else False
+        
+        if is_checked or final_checked:
             log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' selected and verified!", symbol="  ", indent=4)
             return True
         else:
-            log_step(f"    ⚠️  Radio button may not be fully selected - checking again...", symbol="  ", indent=4)
-            # One more verification check
-            js_verify = f"""
-            (function() {{
-                const questionText = {json.dumps(question)};
-                const answerValue = {json.dumps(answer)};
-                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
-                for (const heading of headings) {{
-                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
-                        let radioGroup = heading.parentElement.querySelector('[role="radiogroup"]');
-                        if (!radioGroup) {{
-                            let sibling = heading.parentElement.nextElementSibling;
-                            for (let i = 0; i < 5 && sibling; i++) {{
-                                radioGroup = sibling.querySelector('[role="radiogroup"]');
-                                if (radioGroup) break;
-                                sibling = sibling.nextElementSibling;
-                            }}
-                        }}
-                        if (radioGroup) {{
-                            const radio = radioGroup.querySelector(`[role="radio"][data-value="${{answerValue}}"]`);
-                            return {{checked: radio && radio.getAttribute('aria-checked') === 'true'}};
-                        }}
-                    }}
-                }}
-                return {{checked: false}};
-            }})();
-            """
-            verify_result = await page.evaluate(js_verify)
-            final_checked = verify_result.get("checked", False) if verify_result else False
+            log_step(f"    ⚠️  Radio button may not be fully selected - retrying...", symbol="  ", indent=4)
+            # Retry once more
+            await asyncio.sleep(0.5)
+            retry_result = await page.evaluate(js_fill_radio)
+            await asyncio.sleep(1.0)
+            verify_result2 = await page.evaluate(js_verify)
+            final_checked2 = verify_result2.get("checked", False) if verify_result2 else False
             
-            if final_checked:
-                log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' verified on second check!", symbol="  ", indent=4)
+            if final_checked2:
+                log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' verified after retry!", symbol="  ", indent=4)
                 return True
             else:
                 log_step(f"    ❌ Radio button selection failed after all attempts", symbol="  ", indent=4)
@@ -667,7 +697,7 @@ async def fill_dropdown(question: str, answer: str) -> bool:
     session = await get_browser_session()
     page = await session.get_current_page()
     
-    # Complete JavaScript function to find, open, select, and verify dropdown
+    # Complete JavaScript function to find, open, select, and verify dropdown - Enhanced version
     js_fill_dropdown = f"""
     (function() {{
         const questionText = {json.dumps(question)};
@@ -693,26 +723,64 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             return {{success: false, error: 'Question heading not found: ' + questionText}};
         }}
         
-        // Find listbox - search in parent and siblings
+        // Find listbox - search more thoroughly with multiple strategies
         function findListbox(heading) {{
-            // Check parent and ancestors
+            // Strategy 1: Check parent and ancestors
             let element = heading.parentElement;
             let depth = 0;
-            while (element && depth < 5) {{
-                const box = element.querySelector('[role="listbox"]');
+            while (element && depth < 8) {{
+                // Try direct query
+                let box = element.querySelector('[role="listbox"]');
                 if (box) return box;
+                
+                // Try finding by aria-haspopup
+                box = element.querySelector('[aria-haspopup="listbox"]');
+                if (box) return box;
+                
+                // Try finding select-like elements
+                box = element.querySelector('select, [role="combobox"]');
+                if (box) return box;
+                
                 element = element.parentElement;
                 depth++;
             }}
             
-            // Check next siblings
+            // Strategy 2: Check next siblings (more thoroughly)
             let sibling = heading.parentElement.nextElementSibling;
             let count = 0;
-            while (sibling && count < 10) {{
-                const box = sibling.querySelector('[role="listbox"]');
+            while (sibling && count < 15) {{
+                let box = sibling.querySelector('[role="listbox"]');
                 if (box) return box;
+                
+                box = sibling.querySelector('[aria-haspopup="listbox"]');
+                if (box) return box;
+                
+                box = sibling.querySelector('select, [role="combobox"]');
+                if (box) return box;
+                
+                // Check if sibling itself is a listbox
+                if (sibling.getAttribute && sibling.getAttribute('role') === 'listbox') {{
+                    return sibling;
+                }}
+                
                 sibling = sibling.nextElementSibling;
                 count++;
+            }}
+            
+            // Strategy 3: Search entire form/question container
+            let container = heading.closest('form, [role="form"], div[data-params]');
+            if (container) {{
+                const boxes = container.querySelectorAll('[role="listbox"], [aria-haspopup="listbox"], select, [role="combobox"]');
+                // Find the one closest to our heading
+                for (const box of boxes) {{
+                    // Check if it's in the same question area
+                    const boxHeading = box.closest('div').querySelector('h3, h4, [role="heading"]');
+                    if (boxHeading === heading || boxHeading && boxHeading.textContent.includes(questionText.split('?')[0])) {{
+                        return box;
+                    }}
+                }}
+                // If none found by heading, return first one
+                if (boxes.length > 0) return boxes[0];
             }}
             
             return null;
@@ -723,52 +791,115 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             return {{success: false, error: 'Dropdown listbox not found near question'}};
         }}
         
-        // Open dropdown if not already open
+        // Focus the listbox first
+        try {{
+            listbox.focus();
+        }} catch (e) {{
+            // Ignore focus errors
+        }}
+        
+        // Open dropdown if not already open - Multiple aggressive methods
         let isExpanded = listbox.getAttribute('aria-expanded') === 'true';
         
         if (!isExpanded) {{
-            // Method 1: Try native click
+            // Method 1: Focus and click
             try {{
+                listbox.focus();
                 listbox.click();
             }} catch (e) {{
-                // If click fails, try events
+                // Continue to other methods
             }}
             
-            // Method 2: Dispatch mouse events
-            const openEvents = ['mousedown', 'mouseup', 'click'];
+            // Method 2: Dispatch comprehensive mouse events
+            const openEvents = ['mousedown', 'focus', 'mouseup', 'click'];
             for (const eventType of openEvents) {{
-                const event = new MouseEvent(eventType, {{
+                try {{
+                    if (eventType === 'focus') {{
+                        listbox.focus();
+                    }} else {{
+                        const event = new MouseEvent(eventType, {{
+                            bubbles: true,
+                            cancelable: true,
+                            view: window,
+                            button: 0,
+                            buttons: 1,
+                            detail: 1
+                        }});
+                        listbox.dispatchEvent(event);
+                    }}
+                }} catch (e) {{
+                    // Continue
+                }}
+            }}
+            
+            // Method 3: Try keyboard events (Space or Enter to open)
+            try {{
+                const keyDownEvent = new KeyboardEvent('keydown', {{
                     bubbles: true,
                     cancelable: true,
-                    view: window,
-                    button: 0,
-                    buttons: 1
+                    key: ' ',
+                    code: 'Space',
+                    keyCode: 32
                 }});
-                listbox.dispatchEvent(event);
+                listbox.dispatchEvent(keyDownEvent);
+                
+                const keyUpEvent = new KeyboardEvent('keyup', {{
+                    bubbles: true,
+                    cancelable: true,
+                    key: ' ',
+                    code: 'Space',
+                    keyCode: 32
+                }});
+                listbox.dispatchEvent(keyUpEvent);
+            }} catch (e) {{
+                // Continue
             }}
             
-            // Wait for dropdown to open
+            // Wait longer for dropdown to open and options to appear
             const openStart = Date.now();
-            while (Date.now() - openStart < 800) {{
+            while (Date.now() - openStart < 1500) {{
                 if (listbox.getAttribute('aria-expanded') === 'true') {{
                     isExpanded = true;
+                    // Wait a bit more for options to render
+                    const renderStart = Date.now();
+                    while (Date.now() - renderStart < 300) {{
+                        // Wait for options
+                    }}
                     break;
                 }}
             }}
         }}
         
-        // Find target option by data-value
-        const options = Array.from(listbox.querySelectorAll('[role="option"][data-value]'));
+        // Find target option by data-value - search in all possible locations
         let targetOption = null;
         
+        // First, try finding in the listbox
+        const options = Array.from(listbox.querySelectorAll('[role="option"][data-value]'));
         for (const option of options) {{
             const dataValue = option.getAttribute('data-value');
             if (dataValue === answerValue) {{
-                if (option.getAttribute('aria-disabled') === 'true') {{
-                    return {{success: false, error: 'Option is disabled'}};
+                if (option.getAttribute('aria-disabled') !== 'true') {{
+                    targetOption = option;
+                    break;
                 }}
-                targetOption = option;
-                break;
+            }}
+        }}
+        
+        // If not found, try searching in document (options might be in a portal/overlay)
+        if (!targetOption) {{
+            const allOptions = Array.from(document.querySelectorAll('[role="option"][data-value]'));
+            for (const option of allOptions) {{
+                const dataValue = option.getAttribute('data-value');
+                if (dataValue === answerValue) {{
+                    if (option.getAttribute('aria-disabled') !== 'true') {{
+                        // Check if this option is related to our listbox
+                        const optionListbox = option.closest('[role="listbox"]');
+                        if (optionListbox === listbox || optionListbox === null) {{
+                            targetOption = option;
+                            break;
+                        }}
+                    }}
+                }}
             }}
         }}
         
@@ -776,45 +907,94 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             return {{success: false, error: 'Option with data-value "' + answerValue + '" not found'}};
         }}
         
-        // Scroll option into view if needed
+        // Scroll option into view
         try {{
-            targetOption.scrollIntoView({{ behavior: 'instant', block: 'nearest' }});
+            targetOption.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+            const scrollStart = Date.now();
+            while (Date.now() - scrollStart < 200) {{
+                // Wait for scroll
+            }}
         }} catch (e) {{
             // Ignore scroll errors
         }}
         
-        // Method 1: Try native click
+        // Focus the option first
+        try {{
+            targetOption.focus();
+        }} catch (e) {{
+            // Ignore
+        }}
+        
+        // Multiple selection methods
+        // Method 1: Native click
         try {{
             targetOption.click();
         }} catch (e) {{
-            // If click fails, try events
+            // Continue
         }}
         
-        // Method 2: Dispatch mouse events
-        const selectEvents = ['mousedown', 'mouseup', 'click'];
+        // Method 2: Comprehensive mouse events
+        const selectEvents = ['mousedown', 'focus', 'mouseup', 'click'];
         for (const eventType of selectEvents) {{
-            const event = new MouseEvent(eventType, {{
+            try {{
+                if (eventType === 'focus') {{
+                    targetOption.focus();
+                }} else {{
+                    const event = new MouseEvent(eventType, {{
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        button: 0,
+                        buttons: 1,
+                        detail: 1
+                    }});
+                    targetOption.dispatchEvent(event);
+                }}
+            }} catch (e) {{
+                // Continue
+            }}
+        }}
+        
+        // Method 3: Keyboard Enter
+        try {{
+            const enterDown = new KeyboardEvent('keydown', {{
                 bubbles: true,
                 cancelable: true,
-                view: window,
-                button: 0,
-                buttons: 1
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13
             }});
-            targetOption.dispatchEvent(event);
+            targetOption.dispatchEvent(enterDown);
+            
+            const enterUp = new KeyboardEvent('keyup', {{
+                bubbles: true,
+                cancelable: true,
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13
+            }});
+            targetOption.dispatchEvent(enterUp);
+        }} catch (e) {{
+            // Continue
         }}
         
         // Wait for state update
         const waitStart = Date.now();
-        while (Date.now() - waitStart < 500) {{
+        while (Date.now() - waitStart < 800) {{
             // Busy wait
         }}
         
-        // Check if selected
+        // Check if selected - multiple ways
         let isSelected = targetOption.getAttribute('aria-selected') === 'true';
         
+        // Also check if listbox shows the selected value
+        const listboxValue = listbox.getAttribute('aria-activedescendant');
+        const listboxText = listbox.textContent || '';
+        const hasValue = listboxValue === targetOption.id || listboxText.includes(answerValue);
+        
         // If still not selected, try direct manipulation
-        if (!isSelected) {{
-            // Unselect all options
+        if (!isSelected && !hasValue) {{
+            // Unselect all options in listbox
             const allOptions = listbox.querySelectorAll('[role="option"]');
             for (const option of allOptions) {{
                 option.setAttribute('aria-selected', 'false');
@@ -828,15 +1008,30 @@ async def fill_dropdown(question: str, answer: str) -> bool:
                 listbox.setAttribute('aria-activedescendant', targetOption.id);
             }}
             
-            // Trigger events
-            const changeEvent = new Event('change', {{ bubbles: true, cancelable: true }});
-            targetOption.dispatchEvent(changeEvent);
+            // Update listbox value attribute if it exists
+            if (listbox.hasAttribute('value')) {{
+                listbox.setAttribute('value', answerValue);
+            }}
             
-            const inputEvent = new Event('input', {{ bubbles: true, cancelable: true }});
-            targetOption.dispatchEvent(inputEvent);
+            // Trigger comprehensive events
+            const events = ['change', 'input', 'blur'];
+            for (const eventType of events) {{
+                try {{
+                    const event = new Event(eventType, {{ bubbles: true, cancelable: true }});
+                    targetOption.dispatchEvent(event);
+                    listbox.dispatchEvent(event);
+                }} catch (e) {{
+                    // Continue
+                }}
+            }}
             
             // Check again
             isSelected = targetOption.getAttribute('aria-selected') === 'true';
+            const newListboxValue = listbox.getAttribute('aria-activedescendant');
+            const newListboxText = listbox.textContent || '';
+            const newHasValue = newListboxValue === targetOption.id || newListboxText.includes(answerValue);
+            
+            isSelected = isSelected || newHasValue;
         }}
         
         return {{
@@ -845,7 +1040,8 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             dataValue: targetOption.getAttribute('data-value'),
             questionFound: true,
             listboxFound: true,
-            optionFound: true
+            optionFound: true,
+            listboxExpanded: isExpanded
         }};
     }})();
     """
@@ -863,8 +1059,8 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             log_step(f"    ⚠️  {error_msg}", symbol="  ", indent=4)
             return False
         
-        # Wait a bit more for any async updates
-        await asyncio.sleep(0.8)
+        # Wait longer for any async updates and DOM changes
+        await asyncio.sleep(1.5)
         
         # Final verification
         is_selected = result.get("selected", False)
@@ -1115,44 +1311,74 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
                             break
         
         elif field_type == "radio":
-            # Use JavaScript to check if radio is checked
+            # Use JavaScript to check if radio is checked - improved search pattern
             js_check = f"""
             (function() {{
                 const questionText = {json.dumps(question)};
                 const answerValue = {json.dumps(expected_answer)};
                 
-                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
-                let targetHeading = null;
-                for (const heading of headings) {{
-                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
-                        targetHeading = heading;
-                        break;
+                // Helper function to find question heading (same as fill function)
+                function findQuestionHeading(questionText) {{
+                    const headings = Array.from(document.querySelectorAll('h3, h4, h5, [role="heading"]'));
+                    const questionKey = questionText.split('?')[0].trim().toLowerCase();
+                    
+                    for (const heading of headings) {{
+                        const headingText = heading.textContent ? heading.textContent.trim().toLowerCase() : '';
+                        if (headingText.includes(questionKey) || questionKey.includes(headingText.split(' ')[0])) {{
+                            return heading;
+                        }}
                     }}
+                    return null;
                 }}
                 
+                const targetHeading = findQuestionHeading(questionText);
                 if (!targetHeading) return {{found: false}};
                 
-                let radioGroup = targetHeading.parentElement.querySelector('[role="radiogroup"]');
-                if (!radioGroup) {{
-                    let nextSibling = targetHeading.parentElement.nextElementSibling;
-                    let searchCount = 0;
-                    while (nextSibling && searchCount < 5) {{
-                        const group = nextSibling.querySelector('[role="radiogroup"]');
-                        if (group) {{
-                            radioGroup = group;
-                            break;
-                        }}
-                        nextSibling = nextSibling.nextElementSibling;
-                        searchCount++;
+                // Find radio group - search more thoroughly
+                function findRadioGroup(heading) {{
+                    // Check parent and ancestors
+                    let element = heading.parentElement;
+                    let depth = 0;
+                    while (element && depth < 5) {{
+                        const group = element.querySelector('[role="radiogroup"]');
+                        if (group) return group;
+                        element = element.parentElement;
+                        depth++;
                     }}
+                    
+                    // Check next siblings
+                    let sibling = heading.parentElement.nextElementSibling;
+                    let count = 0;
+                    while (sibling && count < 10) {{
+                        const group = sibling.querySelector('[role="radiogroup"]');
+                        if (group) return group;
+                        sibling = sibling.nextElementSibling;
+                        count++;
+                    }}
+                    
+                    return null;
                 }}
                 
+                const radioGroup = findRadioGroup(targetHeading);
                 if (!radioGroup) return {{found: false}};
                 
+                // Find the radio button with matching data-value
                 const radio = radioGroup.querySelector(`[role="radio"][data-value="${{answerValue}}"]`);
                 if (radio && radio.getAttribute('aria-checked') === 'true') {{
                     return {{found: true}};
                 }}
+                
+                // Also check if any radio in the group is checked (fallback)
+                const allRadios = radioGroup.querySelectorAll('[role="radio"]');
+                for (const r of allRadios) {{
+                    if (r.getAttribute('aria-checked') === 'true') {{
+                        const checkedValue = r.getAttribute('data-value');
+                        if (checkedValue === answerValue) {{
+                            return {{found: true}};
+                        }}
+                    }}
+                }}
+                
                 return {{found: false}};
             }})();
             """
@@ -1164,38 +1390,79 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
                 answer_found = expected_answer.lower() in current_page_text
         
         elif field_type == "dropdown":
-            # Use JavaScript to check if dropdown is selected
+            # Use JavaScript to check if dropdown is selected - improved search pattern
             js_check = f"""
             (function() {{
                 const questionText = {json.dumps(question)};
                 const answerValue = {json.dumps(expected_answer)};
                 
-                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
-                let targetHeading = null;
-                for (const heading of headings) {{
-                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
-                        targetHeading = heading;
-                        break;
+                // Helper function to find question heading (same as fill function)
+                function findQuestionHeading(questionText) {{
+                    const headings = Array.from(document.querySelectorAll('h3, h4, h5, [role="heading"]'));
+                    const questionKey = questionText.split('?')[0].trim().toLowerCase();
+                    
+                    for (const heading of headings) {{
+                        const headingText = heading.textContent ? heading.textContent.trim().toLowerCase() : '';
+                        if (headingText.includes(questionKey) || questionKey.includes(headingText.split(' ')[0])) {{
+                            return heading;
+                        }}
                     }}
+                    return null;
                 }}
                 
+                const targetHeading = findQuestionHeading(questionText);
                 if (!targetHeading) return {{found: false}};
                 
-                let listbox = targetHeading.parentElement.querySelector('[role="listbox"]');
-                if (!listbox) {{
-                    let nextSibling = targetHeading.parentElement.nextElementSibling;
-                    let searchCount = 0;
-                    while (nextSibling && searchCount < 5) {{
-                        const box = nextSibling.querySelector('[role="listbox"]');
-                        if (box) {{
-                            listbox = box;
-                            break;
-                        }}
-                        nextSibling = nextSibling.nextElementSibling;
-                        searchCount++;
+                // Find listbox - same improved search as fill function
+                function findListbox(heading) {{
+                    // Strategy 1: Check parent and ancestors
+                    let element = heading.parentElement;
+                    let depth = 0;
+                    while (element && depth < 8) {{
+                        let box = element.querySelector('[role="listbox"]');
+                        if (box) return box;
+                        box = element.querySelector('[aria-haspopup="listbox"]');
+                        if (box) return box;
+                        box = element.querySelector('select, [role="combobox"]');
+                        if (box) return box;
+                        element = element.parentElement;
+                        depth++;
                     }}
+                    
+                    // Strategy 2: Check next siblings
+                    let sibling = heading.parentElement.nextElementSibling;
+                    let count = 0;
+                    while (sibling && count < 15) {{
+                        let box = sibling.querySelector('[role="listbox"]');
+                        if (box) return box;
+                        box = sibling.querySelector('[aria-haspopup="listbox"]');
+                        if (box) return box;
+                        box = sibling.querySelector('select, [role="combobox"]');
+                        if (box) return box;
+                        if (sibling.getAttribute && sibling.getAttribute('role') === 'listbox') {{
+                            return sibling;
+                        }}
+                        sibling = sibling.nextElementSibling;
+                        count++;
+                    }}
+                    
+                    // Strategy 3: Search entire form/question container
+                    let container = heading.closest('form, [role="form"], div[data-params]');
+                    if (container) {{
+                        const boxes = container.querySelectorAll('[role="listbox"], [aria-haspopup="listbox"], select, [role="combobox"]');
+                        for (const box of boxes) {{
+                            const boxHeading = box.closest('div').querySelector('h3, h4, [role="heading"]');
+                            if (boxHeading === heading || boxHeading && boxHeading.textContent.includes(questionText.split('?')[0])) {{
+                                return box;
+                            }}
+                        }}
+                        if (boxes.length > 0) return boxes[0];
+                    }}
+                    
+                    return null;
                 }}
                 
+                const listbox = findListbox(targetHeading);
                 if (!listbox) return {{found: false}};
                 
                 // Check all options in the listbox
@@ -1207,6 +1474,13 @@ async def validate_completeness(question_matches: Dict[str, dict]) -> bool:
                         }}
                     }}
                 }}
+                
+                // Also check listbox text content as fallback
+                const listboxText = listbox.textContent || '';
+                if (listboxText.includes(answerValue)) {{
+                    return {{found: true}};
+                }}
+                
                 return {{found: false}};
             }})();
             """
@@ -1464,17 +1738,22 @@ async def fill_google_form(use_memory: bool = False):
         # Step 5: Fill form fields
         question_matches = await fill_form_fields(questions_on_form, info_data, info_content, model_manager)
         
-        # Step 6: Skip validations - rely on form's submit button validation
-        log_section("SKIPPING VALIDATIONS")
-        log_step("⏭️  Skipping custom validation checks", symbol="⏭️")
-        log_step("   📋 Relying on Google Forms' built-in validation", symbol="  ", indent=1)
-        log_step("   🔘 Form will validate required fields on submit", symbol="  ", indent=1)
-        log_step("", symbol="")
+        # Step 6: Validation 1 - Completeness (check all questions are answered)
+        validation1_passed = await validate_completeness(question_matches)
         
-        # Step 7: Submit form (Google Forms will validate required fields)
-        log_section("SUBMITTING FORM")
-        log_step("🚀 Proceeding to submit form...", symbol="🚀")
-        log_step("   👀 Google Forms will validate required fields automatically", symbol="  ", indent=1)
+        if not validation1_passed:
+            log_section("VALIDATION FAILED - EXECUTION STOPPED")
+            log_step("", symbol="")
+            log_step("❌❌❌ VALIDATION 1 (COMPLETENESS) FAILED", symbol="❌")
+            log_step("", symbol="")
+            log_step("🛑 EXECUTION STOPPED - Form will NOT be submitted", symbol="🛑")
+            log_step("   👀 Please check the browser - some questions may not be answered correctly", symbol="  ", indent=1)
+            return {"status": "validation_failed", "message": "Validation 1 (completeness) failed"}
+        
+        # Step 7: Submit form
+        log_section("FINAL SUMMARY")
+        log_step("✅ Validation 1 (Completeness): PASSED", symbol="✅")
+        log_step("✅ All questions answered - Submitting form!", symbol="✅")
         log_step("", symbol="")
         
         submit_success = await submit_form()
@@ -1487,9 +1766,8 @@ async def fill_google_form(use_memory: bool = False):
             log_step("   ✓ Form opened", symbol="  ", indent=1)
             log_step("   ✓ Form cleared", symbol="  ", indent=1)
             log_step("   ✓ All fields filled", symbol="  ", indent=1)
-            log_step("   ✓ Form submitted (validation handled by Google Forms)", symbol="  ", indent=1)
-            log_step("", symbol="")
-            log_step("💡 Note: If form shows validation errors, required fields may be missing", symbol="💡")
+            log_step("   ✓ Validation 1 (Completeness) passed", symbol="  ", indent=1)
+            log_step("   ✓ Form submitted", symbol="  ", indent=1)
             log_step("", symbol="")
             return {"status": "success", "message": "Form filled and submitted successfully"}
         else:
