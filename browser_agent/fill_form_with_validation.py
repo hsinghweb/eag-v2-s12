@@ -691,23 +691,21 @@ async def fill_radio_button(question: str, answer: str) -> bool:
 
 
 async def fill_dropdown(question: str, answer: str) -> bool:
-    """Fill a dropdown using pure JavaScript - finds, opens, selects, and verifies"""
-    log_step(f"    🎯 Using JavaScript to find and select dropdown option '{answer}'...", symbol="  ", indent=3)
+    """Fill a dropdown using hybrid approach - JavaScript to find, Playwright to interact"""
+    log_step(f"    🎯 Finding dropdown and selecting option '{answer}'...", symbol="  ", indent=3)
     
     session = await get_browser_session()
     page = await session.get_current_page()
     
-    # Complete JavaScript function to find, open, select, and verify dropdown - Enhanced version
-    js_fill_dropdown = f"""
+    # Step 1: JavaScript to find the listbox and option, return selectors
+    js_find_dropdown = f"""
     (function() {{
         const questionText = {json.dumps(question)};
         const answerValue = {json.dumps(answer)};
         
-        // Helper function to find question heading
         function findQuestionHeading(questionText) {{
             const headings = Array.from(document.querySelectorAll('h3, h4, h5, [role="heading"]'));
             const questionKey = questionText.split('?')[0].trim().toLowerCase();
-            
             for (const heading of headings) {{
                 const headingText = heading.textContent ? heading.textContent.trim().toLowerCase() : '';
                 if (headingText.includes(questionKey) || questionKey.includes(headingText.split(' ')[0])) {{
@@ -717,188 +715,74 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             return null;
         }}
         
-        // Find question heading
         const targetHeading = findQuestionHeading(questionText);
         if (!targetHeading) {{
-            return {{success: false, error: 'Question heading not found: ' + questionText}};
+            return {{success: false, error: 'Question heading not found'}};
         }}
         
-        // Find listbox - search more thoroughly with multiple strategies
         function findListbox(heading) {{
-            // Strategy 1: Check parent and ancestors
             let element = heading.parentElement;
             let depth = 0;
             while (element && depth < 8) {{
-                // Try direct query
-                let box = element.querySelector('[role="listbox"]');
+                let box = element.querySelector('[role="listbox"], [aria-haspopup="listbox"], select, [role="combobox"]');
                 if (box) return box;
-                
-                // Try finding by aria-haspopup
-                box = element.querySelector('[aria-haspopup="listbox"]');
-                if (box) return box;
-                
-                // Try finding select-like elements
-                box = element.querySelector('select, [role="combobox"]');
-                if (box) return box;
-                
                 element = element.parentElement;
                 depth++;
             }}
-            
-            // Strategy 2: Check next siblings (more thoroughly)
             let sibling = heading.parentElement.nextElementSibling;
             let count = 0;
             while (sibling && count < 15) {{
-                let box = sibling.querySelector('[role="listbox"]');
+                let box = sibling.querySelector('[role="listbox"], [aria-haspopup="listbox"], select, [role="combobox"]');
                 if (box) return box;
-                
-                box = sibling.querySelector('[aria-haspopup="listbox"]');
-                if (box) return box;
-                
-                box = sibling.querySelector('select, [role="combobox"]');
-                if (box) return box;
-                
-                // Check if sibling itself is a listbox
-                if (sibling.getAttribute && sibling.getAttribute('role') === 'listbox') {{
-                    return sibling;
-                }}
-                
+                if (sibling.getAttribute && sibling.getAttribute('role') === 'listbox') return sibling;
                 sibling = sibling.nextElementSibling;
                 count++;
             }}
-            
-            // Strategy 3: Search entire form/question container
             let container = heading.closest('form, [role="form"], div[data-params]');
             if (container) {{
                 const boxes = container.querySelectorAll('[role="listbox"], [aria-haspopup="listbox"], select, [role="combobox"]');
-                // Find the one closest to our heading
-                for (const box of boxes) {{
-                    // Check if it's in the same question area
-                    const boxHeading = box.closest('div').querySelector('h3, h4, [role="heading"]');
-                    if (boxHeading === heading || boxHeading && boxHeading.textContent.includes(questionText.split('?')[0])) {{
-                        return box;
-                    }}
-                }}
-                // If none found by heading, return first one
                 if (boxes.length > 0) return boxes[0];
             }}
-            
             return null;
         }}
         
         const listbox = findListbox(targetHeading);
         if (!listbox) {{
-            return {{success: false, error: 'Dropdown listbox not found near question'}};
+            return {{success: false, error: 'Dropdown listbox not found'}};
         }}
         
-        // Focus the listbox first
-        try {{
-            listbox.focus();
-        }} catch (e) {{
-            // Ignore focus errors
+        // Get selector for listbox
+        let listboxSelector = null;
+        if (listbox.id) {{
+            listboxSelector = '#' + listbox.id;
+        }} else {{
+            // Create a unique selector based on position
+            const index = Array.from(listbox.parentElement.children).indexOf(listbox);
+            listboxSelector = `[role="listbox"]:nth-of-type(${{index + 1}})`;
         }}
         
-        // Open dropdown if not already open - Multiple aggressive methods
-        let isExpanded = listbox.getAttribute('aria-expanded') === 'true';
-        
-        if (!isExpanded) {{
-            // Method 1: Focus and click
-            try {{
-                listbox.focus();
-                listbox.click();
-            }} catch (e) {{
-                // Continue to other methods
-            }}
-            
-            // Method 2: Dispatch comprehensive mouse events
-            const openEvents = ['mousedown', 'focus', 'mouseup', 'click'];
-            for (const eventType of openEvents) {{
-                try {{
-                    if (eventType === 'focus') {{
-                        listbox.focus();
-                    }} else {{
-                        const event = new MouseEvent(eventType, {{
-                            bubbles: true,
-                            cancelable: true,
-                            view: window,
-                            button: 0,
-                            buttons: 1,
-                            detail: 1
-                        }});
-                        listbox.dispatchEvent(event);
-                    }}
-                }} catch (e) {{
-                    // Continue
-                }}
-            }}
-            
-            // Method 3: Try keyboard events (Space or Enter to open)
-            try {{
-                const keyDownEvent = new KeyboardEvent('keydown', {{
-                    bubbles: true,
-                    cancelable: true,
-                    key: ' ',
-                    code: 'Space',
-                    keyCode: 32
-                }});
-                listbox.dispatchEvent(keyDownEvent);
-                
-                const keyUpEvent = new KeyboardEvent('keyup', {{
-                    bubbles: true,
-                    cancelable: true,
-                    key: ' ',
-                    code: 'Space',
-                    keyCode: 32
-                }});
-                listbox.dispatchEvent(keyUpEvent);
-            }} catch (e) {{
-                // Continue
-            }}
-            
-            // Wait longer for dropdown to open and options to appear
-            const openStart = Date.now();
-            while (Date.now() - openStart < 1500) {{
-                if (listbox.getAttribute('aria-expanded') === 'true') {{
-                    isExpanded = true;
-                    // Wait a bit more for options to render
-                    const renderStart = Date.now();
-                    while (Date.now() - renderStart < 300) {{
-                        // Wait for options
-                    }}
-                    break;
-                }}
-            }}
-        }}
-        
-        // Find target option by data-value - search in all possible locations
+        // Find option - search in document (options might be in overlay)
         let targetOption = null;
+        let optionSelector = null;
         
-        // First, try finding in the listbox
+        // First try in listbox
         const options = Array.from(listbox.querySelectorAll('[role="option"][data-value]'));
         for (const option of options) {{
-            const dataValue = option.getAttribute('data-value');
-            if (dataValue === answerValue) {{
-                if (option.getAttribute('aria-disabled') !== 'true') {{
-                    targetOption = option;
-                    break;
-                }}
+            if (option.getAttribute('data-value') === answerValue && option.getAttribute('aria-disabled') !== 'true') {{
+                targetOption = option;
+                if (option.id) optionSelector = '#' + option.id;
+                break;
             }}
         }}
         
-        // If not found, try searching in document (options might be in a portal/overlay)
+        // If not found, search entire document
         if (!targetOption) {{
             const allOptions = Array.from(document.querySelectorAll('[role="option"][data-value]'));
             for (const option of allOptions) {{
-                const dataValue = option.getAttribute('data-value');
-                if (dataValue === answerValue) {{
-                    if (option.getAttribute('aria-disabled') !== 'true') {{
-                        // Check if this option is related to our listbox
-                        const optionListbox = option.closest('[role="listbox"]');
-                        if (optionListbox === listbox || optionListbox === null) {{
-                            targetOption = option;
-                            break;
-                        }}
-                    }}
+                if (option.getAttribute('data-value') === answerValue && option.getAttribute('aria-disabled') !== 'true') {{
+                    targetOption = option;
+                    if (option.id) optionSelector = '#' + option.id;
+                    break;
                 }}
             }}
         }}
@@ -907,148 +791,25 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             return {{success: false, error: 'Option with data-value "' + answerValue + '" not found'}};
         }}
         
-        // Scroll option into view
-        try {{
-            targetOption.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-            const scrollStart = Date.now();
-            while (Date.now() - scrollStart < 200) {{
-                // Wait for scroll
-            }}
-        }} catch (e) {{
-            // Ignore scroll errors
-        }}
-        
-        // Focus the option first
-        try {{
-            targetOption.focus();
-        }} catch (e) {{
-            // Ignore
-        }}
-        
-        // Multiple selection methods
-        // Method 1: Native click
-        try {{
-            targetOption.click();
-        }} catch (e) {{
-            // Continue
-        }}
-        
-        // Method 2: Comprehensive mouse events
-        const selectEvents = ['mousedown', 'focus', 'mouseup', 'click'];
-        for (const eventType of selectEvents) {{
-            try {{
-                if (eventType === 'focus') {{
-                    targetOption.focus();
-                }} else {{
-                    const event = new MouseEvent(eventType, {{
-                        bubbles: true,
-                        cancelable: true,
-                        view: window,
-                        button: 0,
-                        buttons: 1,
-                        detail: 1
-                    }});
-                    targetOption.dispatchEvent(event);
-                }}
-            }} catch (e) {{
-                // Continue
-            }}
-        }}
-        
-        // Method 3: Keyboard Enter
-        try {{
-            const enterDown = new KeyboardEvent('keydown', {{
-                bubbles: true,
-                cancelable: true,
-                key: 'Enter',
-                code: 'Enter',
-                keyCode: 13
-            }});
-            targetOption.dispatchEvent(enterDown);
-            
-            const enterUp = new KeyboardEvent('keyup', {{
-                bubbles: true,
-                cancelable: true,
-                key: 'Enter',
-                code: 'Enter',
-                keyCode: 13
-            }});
-            targetOption.dispatchEvent(enterUp);
-        }} catch (e) {{
-            // Continue
-        }}
-        
-        // Wait for state update
-        const waitStart = Date.now();
-        while (Date.now() - waitStart < 800) {{
-            // Busy wait
-        }}
-        
-        // Check if selected - multiple ways
-        let isSelected = targetOption.getAttribute('aria-selected') === 'true';
-        
-        // Also check if listbox shows the selected value
-        const listboxValue = listbox.getAttribute('aria-activedescendant');
-        const listboxText = listbox.textContent || '';
-        const hasValue = listboxValue === targetOption.id || listboxText.includes(answerValue);
-        
-        // If still not selected, try direct manipulation
-        if (!isSelected && !hasValue) {{
-            // Unselect all options in listbox
-            const allOptions = listbox.querySelectorAll('[role="option"]');
-            for (const option of allOptions) {{
-                option.setAttribute('aria-selected', 'false');
-            }}
-            
-            // Set target as selected
-            targetOption.setAttribute('aria-selected', 'true');
-            
-            // Update listbox attributes
-            if (targetOption.id) {{
-                listbox.setAttribute('aria-activedescendant', targetOption.id);
-            }}
-            
-            // Update listbox value attribute if it exists
-            if (listbox.hasAttribute('value')) {{
-                listbox.setAttribute('value', answerValue);
-            }}
-            
-            // Trigger comprehensive events
-            const events = ['change', 'input', 'blur'];
-            for (const eventType of events) {{
-                try {{
-                    const event = new Event(eventType, {{ bubbles: true, cancelable: true }});
-                    targetOption.dispatchEvent(event);
-                    listbox.dispatchEvent(event);
-                }} catch (e) {{
-                    // Continue
-                }}
-            }}
-            
-            // Check again
-            isSelected = targetOption.getAttribute('aria-selected') === 'true';
-            const newListboxValue = listbox.getAttribute('aria-activedescendant');
-            const newListboxText = listbox.textContent || '';
-            const newHasValue = newListboxValue === targetOption.id || newListboxText.includes(answerValue);
-            
-            isSelected = isSelected || newHasValue;
+        // Create fallback selector
+        if (!optionSelector) {{
+            optionSelector = `[role="option"][data-value="${{answerValue}}"]`;
         }}
         
         return {{
             success: true,
-            selected: isSelected,
-            dataValue: targetOption.getAttribute('data-value'),
-            questionFound: true,
-            listboxFound: true,
-            optionFound: true,
-            listboxExpanded: isExpanded
+            listboxSelector: listboxSelector,
+            optionSelector: optionSelector,
+            listboxId: listbox.id,
+            optionId: targetOption.id,
+            answerValue: answerValue
         }};
     }})();
     """
     
     try:
-        # Execute JavaScript
-        result = await page.evaluate(js_fill_dropdown)
+        # Step 1: Find dropdown using JavaScript
+        result = await page.evaluate(js_find_dropdown)
         
         if not result:
             log_step(f"    ⚠️  JavaScript returned no result", symbol="  ", indent=4)
@@ -1059,52 +820,115 @@ async def fill_dropdown(question: str, answer: str) -> bool:
             log_step(f"    ⚠️  {error_msg}", symbol="  ", indent=4)
             return False
         
-        # Wait longer for any async updates and DOM changes
-        await asyncio.sleep(1.5)
+        listbox_selector = result.get("listboxSelector")
+        option_selector = result.get("optionSelector")
+        answer_value = result.get("answerValue", answer)
         
-        # Final verification
-        is_selected = result.get("selected", False)
+        log_step(f"    📍 Found dropdown, opening with Playwright...", symbol="  ", indent=4)
+        
+        # Step 2: Open dropdown using Playwright
+        try:
+            if result.get("listboxId"):
+                await page.click(f'#{result.get("listboxId")}', timeout=5000)
+            else:
+                await page.click(listbox_selector, timeout=5000)
+            await asyncio.sleep(1.0)
+        except Exception as e:
+            log_step(f"    ⚠️  Could not open dropdown, trying alternative: {str(e)[:50]}...", symbol="  ", indent=4)
+            try:
+                await page.click('[role="listbox"]', timeout=3000)
+                await asyncio.sleep(1.0)
+            except Exception:
+                return False
+        
+        log_step(f"    📍 Selecting option '{answer}' with Playwright...", symbol="  ", indent=4)
+        
+        # Step 3: Select option - try multiple methods
+        selection_success = False
+        
+        # Method 1: Click by ID
+        if result.get("optionId"):
+            try:
+                await page.click(f'#{result.get("optionId")}', timeout=5000)
+                await asyncio.sleep(0.8)
+                selection_success = True
+            except Exception:
+                pass
+        
+        # Method 2: Click by data-value
+        if not selection_success:
+            try:
+                await page.click(f'[role="option"][data-value="{answer_value}"]', timeout=5000)
+                await asyncio.sleep(0.8)
+                selection_success = True
+            except Exception:
+                pass
+        
+        # Method 3: Click by text content
+        if not selection_success:
+            try:
+                await page.click(f'text={answer}', timeout=3000)
+                await asyncio.sleep(0.8)
+                selection_success = True
+            except Exception:
+                pass
+        
+        # Step 4: Verify selection
+        await asyncio.sleep(0.5)
+        js_verify = f"""
+        (function() {{
+            const answerValue = {json.dumps(answer_value)};
+            const listboxes = Array.from(document.querySelectorAll('[role="listbox"]'));
+            for (const listbox of listboxes) {{
+                const options = listbox.querySelectorAll('[role="option"][data-value]');
+                for (const option of options) {{
+                    if (option.getAttribute('data-value') === answerValue) {{
+                        if (option.getAttribute('aria-selected') === 'true') {{
+                            return {{selected: true}};
+                        }}
+                    }}
+                }}
+                if (listbox.textContent && listbox.textContent.includes(answerValue)) {{
+                    return {{selected: true}};
+                }}
+            }}
+            return {{selected: false}};
+        }})();
+        """
+        
+        verify_result = await page.evaluate(js_verify)
+        is_selected = verify_result.get("selected", False) if verify_result else False
         
         if is_selected:
             log_step(f"    ✅✅✅ SUCCESS! Dropdown option '{answer}' selected and verified!", symbol="  ", indent=4)
             return True
         else:
-            log_step(f"    ⚠️  Dropdown may not be fully selected - checking again...", symbol="  ", indent=4)
-            # One more verification check
-            js_verify = f"""
+            log_step(f"    ⚠️  Selection not verified - trying direct JavaScript...", symbol="  ", indent=4)
+            # Last resort: Direct JavaScript manipulation
+            js_direct = f"""
             (function() {{
-                const questionText = {json.dumps(question)};
-                const answerValue = {json.dumps(answer)};
-                const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
-                for (const heading of headings) {{
-                    if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
-                        let listbox = heading.parentElement.querySelector('[role="listbox"]');
-                        if (!listbox) {{
-                            let sibling = heading.parentElement.nextElementSibling;
-                            for (let i = 0; i < 5 && sibling; i++) {{
-                                listbox = sibling.querySelector('[role="listbox"]');
-                                if (listbox) break;
-                                sibling = sibling.nextElementSibling;
-                            }}
-                        }}
-                        if (listbox) {{
-                            const options = listbox.querySelectorAll('[role="option"][data-value]');
-                            for (const option of options) {{
-                                if (option.getAttribute('data-value') === answerValue) {{
-                                    return {{selected: option.getAttribute('aria-selected') === 'true'}};
-                                }}
-                            }}
+                const answerValue = {json.dumps(answer_value)};
+                const listboxes = Array.from(document.querySelectorAll('[role="listbox"]'));
+                for (const listbox of listboxes) {{
+                    const options = listbox.querySelectorAll('[role="option"][data-value]');
+                    for (const option of options) {{
+                        if (option.getAttribute('data-value') === answerValue) {{
+                            listbox.querySelectorAll('[role="option"]').forEach(o => o.setAttribute('aria-selected', 'false'));
+                            option.setAttribute('aria-selected', 'true');
+                            option.click();
+                            if (option.id) listbox.setAttribute('aria-activedescendant', option.id);
+                            return {{success: true}};
                         }}
                     }}
                 }}
-                return {{selected: false}};
+                return {{success: false}};
             }})();
             """
-            verify_result = await page.evaluate(js_verify)
-            final_selected = verify_result.get("selected", False) if verify_result else False
-            
-            if final_selected:
-                log_step(f"    ✅✅✅ SUCCESS! Dropdown '{answer}' verified on second check!", symbol="  ", indent=4)
+            direct_result = await page.evaluate(js_direct)
+            await asyncio.sleep(0.5)
+            verify_result2 = await page.evaluate(js_verify)
+            if verify_result2 and verify_result2.get("selected", False):
+                log_step(f"    ✅✅✅ SUCCESS! Dropdown '{answer}' verified after direct selection!", symbol="  ", indent=4)
                 return True
             else:
                 log_step(f"    ❌ Dropdown selection failed after all attempts", symbol="  ", indent=4)
