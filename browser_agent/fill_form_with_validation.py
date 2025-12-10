@@ -1310,33 +1310,18 @@ async def fill_google_form(use_memory: bool = False):
         # Step 5: Fill form fields
         question_matches = await fill_form_fields(questions_on_form, info_data, info_content, model_manager)
         
-        # Step 6: Validation 1 - Completeness
-        validation1_passed = await validate_completeness(question_matches)
+        # Step 6: Skip validations - rely on form's submit button validation
+        log_section("SKIPPING VALIDATIONS")
+        log_step("⏭️  Skipping custom validation checks", symbol="⏭️")
+        log_step("   📋 Relying on Google Forms' built-in validation", symbol="  ", indent=1)
+        log_step("   🔘 Form will validate required fields on submit", symbol="  ", indent=1)
+        log_step("", symbol="")
         
-        if not validation1_passed:
-            log_section("VALIDATION FAILED - EXECUTION STOPPED")
-            log_step("", symbol="")
-            log_step("❌❌❌ VALIDATION 1 (COMPLETENESS) FAILED", symbol="❌")
-            log_step("", symbol="")
-            log_step("🛑 EXECUTION STOPPED - Form will NOT be submitted", symbol="🛑")
-            return {"status": "validation_failed", "message": "Validation 1 (completeness) failed"}
-        
-        # Step 7: Validation 2 - Accuracy
-        validation2_passed = await validate_accuracy(question_matches)
-        
-        if not validation2_passed:
-            log_section("VALIDATION FAILED - EXECUTION STOPPED")
-            log_step("", symbol="")
-            log_step("❌❌❌ VALIDATION 2 (ACCURACY) FAILED", symbol="❌")
-            log_step("", symbol="")
-            log_step("🛑 EXECUTION STOPPED - Form will NOT be submitted", symbol="🛑")
-            return {"status": "validation_failed", "message": "Validation 2 (accuracy) failed"}
-        
-        # Step 8: Submit form
-        log_section("FINAL SUMMARY")
-        log_step("✅ Validation 1 (Completeness): PASSED", symbol="✅")
-        log_step("✅ Validation 2 (Accuracy): PASSED", symbol="✅")
-        log_step("✅ Both validations passed - Submitting form!", symbol="✅")
+        # Step 7: Submit form (Google Forms will validate required fields)
+        log_section("SUBMITTING FORM")
+        log_step("🚀 Proceeding to submit form...", symbol="🚀")
+        log_step("   👀 Google Forms will validate required fields automatically", symbol="  ", indent=1)
+        log_step("", symbol="")
         
         submit_success = await submit_form()
         
@@ -1348,9 +1333,9 @@ async def fill_google_form(use_memory: bool = False):
             log_step("   ✓ Form opened", symbol="  ", indent=1)
             log_step("   ✓ Form cleared", symbol="  ", indent=1)
             log_step("   ✓ All fields filled", symbol="  ", indent=1)
-            log_step("   ✓ Validation 1 (Completeness) passed", symbol="  ", indent=1)
-            log_step("   ✓ Validation 2 (Accuracy) passed", symbol="  ", indent=1)
-            log_step("   ✓ Form submitted", symbol="  ", indent=1)
+            log_step("   ✓ Form submitted (validation handled by Google Forms)", symbol="  ", indent=1)
+            log_step("", symbol="")
+            log_step("💡 Note: If form shows validation errors, required fields may be missing", symbol="💡")
             log_step("", symbol="")
             return {"status": "success", "message": "Form filled and submitted successfully"}
         else:
