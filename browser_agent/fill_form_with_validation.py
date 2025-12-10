@@ -442,243 +442,327 @@ async def fill_text_field(question: str, answer: str, used_indices: List[int]) -
 
 
 async def fill_radio_button(question: str, answer: str) -> bool:
-    """Fill a radio button using JavaScript to find by data-value"""
-    log_step(f"    🔘 Using JavaScript to find radio button with data-value='{answer}'...", symbol="  ", indent=3)
+    """Fill a radio button using Playwright's native click methods"""
+    log_step(f"    🔘 Finding radio button with data-value='{answer}'...", symbol="  ", indent=3)
     
     session = await get_browser_session()
     page = await session.get_current_page()
     
-    # JavaScript to find and click radio button by data-value
-    js_code = f"""
-    (async function() {{
-        // Find the question heading
+    # JavaScript to find radio button selector
+    js_find = f"""
+    (function() {{
         const questionText = {json.dumps(question)};
         const answerValue = {json.dumps(answer)};
         
-        // Find all headings (h3, h4, etc.) that contain the question text
         const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
         let targetHeading = null;
-        
         for (const heading of headings) {{
             if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
                 targetHeading = heading;
                 break;
             }}
         }}
+        if (!targetHeading) return {{found: false, error: 'Question not found'}};
         
-        if (!targetHeading) {{
-            return {{success: false, error: 'Question not found'}};
-        }}
-        
-        // Find the radio button container (radiogroup) near this heading
-        let radioGroup = null;
-        let currentElement = targetHeading.parentElement;
-        
-        // Search in the same question container
-        while (currentElement && currentElement !== document.body) {{
-            const group = currentElement.querySelector('[role="radiogroup"]');
-            if (group) {{
-                radioGroup = group;
-                break;
-            }}
-            currentElement = currentElement.parentElement;
-        }}
-        
+        let radioGroup = targetHeading.parentElement.querySelector('[role="radiogroup"]');
         if (!radioGroup) {{
-            // Fallback: search for radiogroup after the heading
             let nextSibling = targetHeading.parentElement.nextElementSibling;
             let searchCount = 0;
             while (nextSibling && searchCount < 5) {{
                 const group = nextSibling.querySelector('[role="radiogroup"]');
-                if (group) {{
-                    radioGroup = group;
-                    break;
-                }}
+                if (group) {{ radioGroup = group; break; }}
                 nextSibling = nextSibling.nextElementSibling;
                 searchCount++;
             }}
         }}
+        if (!radioGroup) return {{found: false, error: 'Radio group not found'}};
         
-        if (!radioGroup) {{
-            return {{success: false, error: 'Radio group not found'}};
-        }}
-        
-        // Find the radio button with matching data-value
         const radioButtons = radioGroup.querySelectorAll('[role="radio"][data-value]');
         for (const radio of radioButtons) {{
             if (radio.getAttribute('data-value') === answerValue) {{
-                // Check if it's disabled
                 if (radio.getAttribute('aria-disabled') === 'true') {{
-                    return {{success: false, error: 'Radio button is disabled'}};
+                    return {{found: false, error: 'Radio button is disabled'}};
                 }}
-                
-                // Click the radio button
-                radio.click();
-                
-                // Wait a bit for the click to register
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Verify it was selected
-                const isChecked = radio.getAttribute('aria-checked') === 'true';
-                return {{
-                    success: isChecked,
-                    checked: isChecked,
-                    dataValue: radio.getAttribute('data-value')
-                }};
+                // Return a unique selector for this radio
+                const id = radio.id || radio.getAttribute('id');
+                if (id) {{
+                    return {{found: true, selector: `#${{id}}`, hasId: true}};
+                }}
+                // Fallback: use data-value selector
+                return {{found: true, selector: `[role="radio"][data-value="${{answerValue}}"]`, hasId: false}};
             }}
         }}
-        
-        return {{success: false, error: 'Radio button with matching data-value not found'}};
+        return {{found: false, error: 'Radio button with matching data-value not found'}};
     }})();
     """
     
     try:
-        # Execute JavaScript and wait for result
-        result = await page.evaluate(js_code)
+        # Find the radio button
+        result = await page.evaluate(js_find)
         
-        # Wait a bit for the click to register
-        await asyncio.sleep(1.0)
+        if not result or not result.get("found"):
+            error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
+            log_step(f"    ⚠️  Could not find radio: {error_msg}", symbol="  ", indent=4)
+            return False
         
-        if result and result.get("success"):
-            log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' clicked!", symbol="  ", indent=4)
-            await asyncio.sleep(0.5)
+        selector = result.get("selector")
+        log_step(f"    📍 Found radio button, clicking with Playwright...", symbol="  ", indent=4)
+        
+        # Use Playwright's native click - this properly triggers Google Forms handlers
+        if result.get("hasId"):
+            # Try by ID first (most reliable)
+            try:
+                await page.click(selector, timeout=5000)
+            except Exception:
+                # Fallback to data-value selector
+                await page.click(f'[role="radio"][data-value="{answer}"]', timeout=5000)
+        else:
+            # Use the data-value selector, but scope it to the question area
+            await page.click(selector, timeout=5000)
+        
+        # Wait for click to register
+        await asyncio.sleep(1.5)
+        
+        # Verify it was actually selected
+        js_verify = f"""
+        (function() {{
+            const questionText = {json.dumps(question)};
+            const answerValue = {json.dumps(answer)};
+            
+            const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+            let targetHeading = null;
+            for (const heading of headings) {{
+                if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                    targetHeading = heading;
+                    break;
+                }}
+            }}
+            if (!targetHeading) return {{checked: false}};
+            
+            let radioGroup = targetHeading.parentElement.querySelector('[role="radiogroup"]');
+            if (!radioGroup) {{
+                let nextSibling = targetHeading.parentElement.nextElementSibling;
+                let searchCount = 0;
+                while (nextSibling && searchCount < 5) {{
+                    const group = nextSibling.querySelector('[role="radiogroup"]');
+                    if (group) {{ radioGroup = group; break; }}
+                    nextSibling = nextSibling.nextElementSibling;
+                    searchCount++;
+                }}
+            }}
+            if (!radioGroup) return {{checked: false}};
+            
+            const radio = radioGroup.querySelector(`[role="radio"][data-value="${{answerValue}}"]`);
+            return {{checked: radio && radio.getAttribute('aria-checked') === 'true'}};
+        }})();
+        """
+        
+        verify_result = await page.evaluate(js_verify)
+        is_checked = verify_result.get("checked", False) if verify_result else False
+        
+        if is_checked:
+            log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' clicked and verified!", symbol="  ", indent=4)
             return True
         else:
-            error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
-            log_step(f"    ⚠️  JavaScript result: {error_msg}", symbol="  ", indent=4)
-            return False
+            log_step(f"    ⚠️  Radio button clicked but not verified - trying label click...", symbol="  ", indent=4)
+            # Try clicking the label instead
+            try:
+                label_selector = f'label[for="{result.get("selector", "").lstrip("#")}"]'
+                await page.click(label_selector, timeout=3000)
+                await asyncio.sleep(1.5)
+                verify_result2 = await page.evaluate(js_verify)
+                if verify_result2 and verify_result2.get("checked", False):
+                    log_step(f"    ✅✅✅ SUCCESS! Radio button '{answer}' verified after label click!", symbol="  ", indent=4)
+                    return True
+            except Exception:
+                pass
+            
+            # Final retry: direct click again
+            await page.click(f'[role="radio"][data-value="{answer}"]', timeout=5000)
+            await asyncio.sleep(1.5)
+            verify_result3 = await page.evaluate(js_verify)
+            if verify_result3 and verify_result3.get("checked", False):
+                log_step(f"    ✅✅✅ SUCCESS on final retry! Radio button '{answer}' verified!", symbol="  ", indent=4)
+                return True
+            else:
+                log_step(f"    ❌ Radio button still not checked after all attempts", symbol="  ", indent=4)
+                return False
+            
     except Exception as e:
         error_str = str(e)
-        log_step(f"    ❌ JavaScript execution failed: {error_str[:150]}...", symbol="  ", indent=4)
-        import traceback
-        log_step(f"    Full error: {traceback.format_exc()[:200]}...", symbol="  ", indent=5)
+        log_step(f"    ❌ Failed: {error_str[:150]}...", symbol="  ", indent=4)
         return False
 
 
 async def fill_dropdown(question: str, answer: str) -> bool:
-    """Fill a dropdown using JavaScript to find by data-value"""
-    log_step(f"    🎯 Using JavaScript to find dropdown option with data-value='{answer}'...", symbol="  ", indent=3)
+    """Fill a dropdown using Playwright's native click methods"""
+    log_step(f"    🎯 Finding dropdown option with data-value='{answer}'...", symbol="  ", indent=3)
     
     session = await get_browser_session()
     page = await session.get_current_page()
     
-    # JavaScript to find and click dropdown option by data-value
-    # Split into two steps: open dropdown, then select option
-    js_find_and_open = f"""
+    # JavaScript to find listbox and option selectors
+    js_find = f"""
     (function() {{
         const questionText = {json.dumps(question)};
+        const answerValue = {json.dumps(answer)};
         
-        // Find the question heading
         const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
         let targetHeading = null;
-        
         for (const heading of headings) {{
             if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
                 targetHeading = heading;
                 break;
             }}
         }}
+        if (!targetHeading) return {{found: false, error: 'Question not found'}};
         
-        if (!targetHeading) {{
-            return {{success: false, error: 'Question not found'}};
-        }}
-        
-        // Find the dropdown listbox near this heading
-        let listbox = null;
-        let currentElement = targetHeading.parentElement;
-        
-        while (currentElement && currentElement !== document.body) {{
-            const box = currentElement.querySelector('[role="listbox"]');
-            if (box) {{
-                listbox = box;
-                break;
-            }}
-            currentElement = currentElement.parentElement;
-        }}
-        
+        let listbox = targetHeading.parentElement.querySelector('[role="listbox"]');
         if (!listbox) {{
             let nextSibling = targetHeading.parentElement.nextElementSibling;
             let searchCount = 0;
             while (nextSibling && searchCount < 5) {{
                 const box = nextSibling.querySelector('[role="listbox"]');
-                if (box) {{
-                    listbox = box;
-                    break;
-                }}
+                if (box) {{ listbox = box; break; }}
                 nextSibling = nextSibling.nextElementSibling;
                 searchCount++;
             }}
         }}
+        if (!listbox) return {{found: false, error: 'Dropdown listbox not found'}};
         
-        if (!listbox) {{
-            return {{success: false, error: 'Dropdown listbox not found'}};
+        const listboxId = listbox.id;
+        const isExpanded = listbox.getAttribute('aria-expanded') === 'true';
+        
+        // Find the option
+        const options = listbox.querySelectorAll('[role="option"][data-value]');
+        let optionId = null;
+        for (const option of options) {{
+            if (option.getAttribute('data-value') === answerValue) {{
+                if (option.getAttribute('aria-disabled') === 'true') {{
+                    return {{found: false, error: 'Option is disabled'}};
+                }}
+                optionId = option.id;
+                break;
+            }}
         }}
         
-        // Click the dropdown to open it
-        if (listbox.getAttribute('aria-expanded') === 'false') {{
-            listbox.click();
-        }}
+        if (!optionId) return {{found: false, error: 'Option with matching data-value not found'}};
         
-        return {{success: true, listboxFound: true}};
+        return {{
+            found: true,
+            listboxId: listboxId,
+            optionId: optionId,
+            isExpanded: isExpanded,
+            listboxSelector: listboxId ? `#${{listboxId}}` : '[role="listbox"]',
+            optionSelector: optionId ? `#${{optionId}}` : `[role="option"][data-value="${{answerValue}}"]`
+        }};
     }})();
     """
     
     try:
-        # Step 1: Open dropdown
-        result1 = await page.evaluate(js_find_and_open)
-        if not result1 or not result1.get("success"):
-            error_msg = result1.get('error', 'Unknown error') if result1 else 'No result returned'
-            log_step(f"    ⚠️  Failed to find/open dropdown: {error_msg}", symbol="  ", indent=4)
+        # Find the dropdown and option
+        result = await page.evaluate(js_find)
+        
+        if not result or not result.get("found"):
+            error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
+            log_step(f"    ⚠️  Could not find dropdown: {error_msg}", symbol="  ", indent=4)
             return False
         
-        # Wait for dropdown to open
-        await asyncio.sleep(1.5)
+        listbox_selector = result.get("listboxSelector")
+        option_selector = result.get("optionSelector")
+        is_expanded = result.get("isExpanded", False)
         
-        # Step 2: Select option
-        js_select_option = f"""
+        log_step(f"    📍 Found dropdown, opening with Playwright...", symbol="  ", indent=4)
+        
+        # Step 1: Open dropdown if not already open
+        if not is_expanded:
+            try:
+                await page.click(listbox_selector, timeout=5000)
+                await asyncio.sleep(1.5)
+            except Exception as e:
+                log_step(f"    ⚠️  Could not open dropdown: {str(e)[:50]}...", symbol="  ", indent=4)
+                return False
+        
+        # Step 2: Click the option using Playwright
+        log_step(f"    📍 Selecting option with Playwright...", symbol="  ", indent=4)
+        try:
+            await page.click(option_selector, timeout=5000)
+            await asyncio.sleep(1.5)
+        except Exception as e:
+            log_step(f"    ⚠️  Could not click option: {str(e)[:50]}...", symbol="  ", indent=4)
+            # Try alternative selector
+            try:
+                await page.click(f'[role="option"][data-value="{answer}"]', timeout=5000)
+                await asyncio.sleep(1.5)
+            except Exception:
+                return False
+        
+        # Verify it was actually selected
+        js_verify = f"""
         (function() {{
+            const questionText = {json.dumps(question)};
             const answerValue = {json.dumps(answer)};
             
-            // Find all listboxes
-            const listboxes = Array.from(document.querySelectorAll('[role="listbox"]'));
-            for (const listbox of listboxes) {{
-                const options = listbox.querySelectorAll('[role="option"][data-value]');
-                for (const option of options) {{
-                    if (option.getAttribute('data-value') === answerValue) {{
-                        if (option.getAttribute('aria-disabled') === 'true') {{
-                            continue;
-                        }}
-                        
-                        option.click();
-                        return {{
-                            success: true,
-                            dataValue: option.getAttribute('data-value')
-                        }};
-                    }}
+            const headings = Array.from(document.querySelectorAll('h3, h4, [role="heading"]'));
+            let targetHeading = null;
+            for (const heading of headings) {{
+                if (heading.textContent && heading.textContent.includes(questionText.split('?')[0])) {{
+                    targetHeading = heading;
+                    break;
                 }}
             }}
+            if (!targetHeading) return {{selected: false}};
             
-            return {{success: false, error: 'Option with matching data-value not found'}};
+            let listbox = targetHeading.parentElement.querySelector('[role="listbox"]');
+            if (!listbox) {{
+                let nextSibling = targetHeading.parentElement.nextElementSibling;
+                let searchCount = 0;
+                while (nextSibling && searchCount < 5) {{
+                    const box = nextSibling.querySelector('[role="listbox"]');
+                    if (box) {{ listbox = box; break; }}
+                    nextSibling = nextSibling.nextElementSibling;
+                    searchCount++;
+                }}
+            }}
+            if (!listbox) return {{selected: false}};
+            
+            const options = listbox.querySelectorAll('[role="option"][data-value]');
+            for (const option of options) {{
+                if (option.getAttribute('data-value') === answerValue) {{
+                    return {{selected: option.getAttribute('aria-selected') === 'true'}};
+                }}
+            }}
+            return {{selected: false}};
         }})();
         """
         
-        result2 = await page.evaluate(js_select_option)
-        await asyncio.sleep(1.0)
+        verify_result = await page.evaluate(js_verify)
+        is_selected = verify_result.get("selected", False) if verify_result else False
         
-        if result2 and result2.get("success"):
-            log_step(f"    ✅✅✅ SUCCESS! Dropdown option '{answer}' selected!", symbol="  ", indent=4)
-            await asyncio.sleep(0.5)
+        if is_selected:
+            log_step(f"    ✅✅✅ SUCCESS! Dropdown option '{answer}' selected and verified!", symbol="  ", indent=4)
             return True
         else:
-            error_msg = result2.get('error', 'Unknown error') if result2 else 'No result returned'
-            log_step(f"    ⚠️  Failed to select option: {error_msg}", symbol="  ", indent=4)
+            log_step(f"    ⚠️  Dropdown option clicked but not verified - retrying...", symbol="  ", indent=4)
+            # Retry: open and select again
+            try:
+                await page.click(listbox_selector, timeout=5000)
+                await asyncio.sleep(1.5)
+                await page.click(option_selector, timeout=5000)
+                await asyncio.sleep(1.5)
+                verify_result2 = await page.evaluate(js_verify)
+                if verify_result2 and verify_result2.get("selected", False):
+                    log_step(f"    ✅✅✅ SUCCESS on retry! Dropdown '{answer}' verified!", symbol="  ", indent=4)
+                    return True
+            except Exception:
+                pass
+            
+            log_step(f"    ❌ Dropdown still not selected after retry", symbol="  ", indent=4)
             return False
             
     except Exception as e:
         error_str = str(e)
-        log_step(f"    ❌ JavaScript execution failed: {error_str[:150]}...", symbol="  ", indent=4)
-        import traceback
-        log_step(f"    Full error: {traceback.format_exc()[:200]}...", symbol="  ", indent=5)
+        log_step(f"    ❌ Failed: {error_str[:150]}...", symbol="  ", indent=4)
         return False
 
 
